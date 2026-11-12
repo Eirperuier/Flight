@@ -136,6 +136,13 @@ public final class ImagePreviewController {
     private var fallbacks: [Int: UIImage] = [:]
 
     private var heroState = HeroState.presented(.zero)
+    /// The flight between the thumbnail and full screen, among the page's layers.
+    private var flight: PreviewFlight?
+    private var flightDone: (() -> Void)?
+    /// Closing: the image as it was let go, which it changes from into its thumbnail.
+    private var flightStart: HeroState?
+    /// The layers over the thumbnail the image flies from or to.
+    private var layers: PreviewLayers?
     private var springs: SpringVector?
     private var springDone: (() -> Void)?
     private lazy var ticker = FrameTicker { [weak self] dt in self?.tick(dt) }
@@ -200,7 +207,10 @@ public final class ImagePreviewController {
     fileprivate func layout(in view: UIView) {
         let bounds = view.bounds
         backdrop.frame = bounds
-        hero.frame = bounds
+        if hero.superview === view {
+            hero.transform = .identity
+            hero.frame = bounds
+        }
 
         let width = bounds.width + configuration.pageSpacing
         let pagerFrame = CGRect(x: -configuration.pageSpacing / 2, y: 0, width: width, height: bounds.height)
@@ -326,26 +336,6 @@ public final class ImagePreviewController {
         hiddenSource = source
     }
 
-    /// The thumbnail's visible area in the viewer, when the app says something covers part of it.
-    private func visibleArea(of source: PreviewSource?) -> CGRect? {
-        guard let view = source?.view, let window = view.window, let root, let area = source?.visibleArea?() else { return nil }
-        return window.convert(area, to: root)
-    }
-
-    /// Cuts the image in flight where the thumbnail's page is covered, as much as the page shows:
-    /// all of it there at the thumbnail, none open, so it comes out from under what covers the
-    /// thumbnail and goes back under it.
-    private func coverHero() {
-        let source = phase == .closing ? closingSource : hiddenSource
-        guard let root, let area = visibleArea(of: source) else { return hero.setCover(nil) }
-        let shown = min(max(heroState.backdrop, 0), 1)
-        let all = root.bounds
-        hero.setCover(CGRect(x: area.minX + (all.minX - area.minX) * shown,
-                             y: area.minY + (all.minY - area.minY) * shown,
-                             width: area.width + (all.width - area.width) * shown,
-                             height: area.height + (all.height - area.height) * shown))
-    }
-
     /// The thumbnail's frame in the viewer, if it is on screen.
     private func visibleFrame(of source: PreviewSource?) -> CGRect? {
         guard let frame = frame(of: source), let root, frame.intersects(root.bounds) else { return nil }
@@ -397,11 +387,20 @@ public final class ImagePreviewController {
         hideSource()
 
         let fitted = fittedFrame
-        let start = UIAccessibility.isReduceMotionEnabled ? nil : sourceState(source)
-        setHero(start ?? .vanished(from: fitted))
         // The navigation controller shows its bars as it appears; they come in with the image instead.
         navigation?.bars.forEach { $0.alpha = 0 }
         setAccessories(visible: true, delay: 0.06)
+        if !UIAccessibility.isReduceMotionEnabled, let view = source?.view, let root {
+            let layers = PreviewLayers(thumbnail: view, stage: root)
+            self.layers = layers
+            if let world = flightWorld(source), let start = sourceState(source, at: world.slotFrame) {
+                setHero(start)
+                hero.turn = world.world.slot.turn
+                return fly(.opening(world.world)) { [weak self] in self?.didSettlePresented() }
+            }
+            self.layers = nil
+        }
+        setHero(.vanished(from: fitted))
         animateHero(to: .presented(fitted), spring: configuration.transitionSpring) { [weak self] in
             self?.didSettlePresented()
         }
@@ -424,6 +423,7 @@ public final class ImagePreviewController {
     }
 
     private func hideHero() {
+        endFlight()
         hero.isHidden = true
         hero.setLiveView(nil)
     }
@@ -452,6 +452,22 @@ public final class ImagePreviewController {
         source?.setHidden(true)
         closingSource = source
 
+        if !UIAccessibility.isReduceMotionEnabled, let view = source?.view, let root, visibleFrame(of: source) != nil {
+            layers = PreviewLayers(thumbnail: view, stage: root)
+            if let world = flightWorld(source) {
+                // The finger's velocity, all of it: the spring turns it home.
+                var v = velocity
+                let speed = hypot(v.x, v.y), cap: CGFloat = 4000
+                if speed > cap { v = CGPoint(x: v.x * cap / speed, y: v.y * cap / speed) }
+                stopSprings()
+                flightStart = heroState
+                return fly(.closing(world.world, center: heroState.clip.center, size: heroState.clip.size,
+                                    velocity: CGVector(dx: v.x, dy: v.y), backdrop: heroState.backdrop)) { [weak self] in
+                    self?.didClose()
+                }
+            }
+            layers = nil
+        }
         let target = closedTarget(source)
         animateHero(to: target, spring: configuration.transitionSpring, velocity: velocity) { [weak self] in
             self?.didClose()
@@ -542,6 +558,7 @@ public final class ImagePreviewController {
         case .began:
             if phase == .presented { liftHero() }
             stopSprings()
+            endFlight()
             phase = .dragging
             drag = DismissDrag(start: heroState, anchor: pan.location(in: root), axis: dragAxis, container: root.bounds.size)
             setAccessories(visible: false)
@@ -630,7 +647,6 @@ public final class ImagePreviewController {
     private func setHero(_ state: HeroState) {
         heroState = state
         hero.apply(state)
-        coverHero()
         backdrop.alpha = state.backdrop
         springs?.set(values: state.vector)
     }
@@ -654,6 +670,7 @@ public final class ImagePreviewController {
 
     private func tick(_ dt: Double) {
         if let handoff { return handOver(handoff) }
+        if flight != nil { return stepFlight(dt) }
         guard var springs else { return ticker.stop() }
         if phase == .closing, var landing, let frame = frame(of: closingSource) {
             if !landing.follow(frame, springs: &springs), let target = sourceState(closingSource) {
@@ -665,20 +682,100 @@ public final class ImagePreviewController {
         self.springs = springs
         heroState = HeroState(springs.values)
         hero.apply(heroState)
-        coverHero()
         backdrop.alpha = heroState.backdrop
-        // Closing: the status bar turns back to the app's as the page shows through.
-        if phase == .closing, !statusBarFollowsApp, heroState.backdrop < 0.5 {
-            statusBarFollowsApp = true
-            #if !os(visionOS)
-            UIView.animate(withDuration: 0.2) { self.navigation?.setNeedsStatusBarAppearanceUpdate() }
-            #endif
-        }
+        followAppStatusBarIfShowing()
         if done {
             let completion = springDone
             stopSprings()
             completion?()
         }
+    }
+
+    // MARK: Flight among the layers
+
+    /// The page as the flight sees it now: the thumbnail (and its frame unturned, for its state),
+    /// the layers over it, the image fitted full screen.
+    private func flightWorld(_ source: PreviewSource?) -> (world: FlightWorld, slotFrame: CGRect)? {
+        guard let root, let view = source?.view, let turned = PreviewLayers.turnedFrame(of: view, in: root) else { return nil }
+        let frame = CGRect(x: turned.center.x - turned.size.width / 2, y: turned.center.y - turned.size.height / 2,
+                           width: turned.size.width, height: turned.size.height)
+        guard let state = sourceState(source, at: frame) else { return nil }
+        let slot = TurnedRect(center: turned.center, size: state.clip.size, turn: turned.turn)
+        let world = FlightWorld(slot: slot, covers: layers?.shapes() ?? [], paged: layers?.paged ?? [],
+                                fitted: fittedFrame, bounds: root.bounds)
+        return (world, frame)
+    }
+
+    private func fly(_ flight: PreviewFlight, completion: @escaping () -> Void) {
+        self.flight = flight
+        flightDone = completion
+        stepFlight(0)
+        ticker.start()
+    }
+
+    private func stepFlight(_ dt: Double) {
+        guard var flight else { return }
+        let source = flight.kind == .opening ? hiddenSource : closingSource
+        guard let now = flightWorld(source) else {
+            // The thumbnail went (its cell was reused): on with the springs, over everything.
+            let done = flightDone
+            endFlight()
+            if flight.kind == .opening {
+                animateHero(to: .presented(fittedFrame), spring: configuration.transitionSpring) { done?() }
+            } else {
+                animateHero(to: closedTarget(source), spring: configuration.transitionSpring) { done?() }
+            }
+            return
+        }
+        if dt > 0 { flight.advance(dt, world: now.world) }
+        self.flight = flight
+        let clip = flight.clip(now.world), g = CGFloat(flight.progress)
+        guard let slotState = sourceState(source, at: now.slotFrame) else { return }
+        var state: HeroState
+        switch flight.kind {
+        case .opening: state = slotState.mixed(with: .presented(fittedFrame), g)
+        case .closing: state = (flightStart ?? slotState).mixed(with: slotState, g)
+        }
+        state = state.centred(at: clip.center)
+        state.backdrop = flight.backdrop
+        heroState = state
+        hero.turn = clip.turn
+        hero.apply(state)
+        backdrop.alpha = state.backdrop
+        layers?.host(hero, level: flight.level)
+        if flight.kind == .closing { followAppStatusBarIfShowing() }
+        if flight.isDone {
+            let done = flightDone
+            self.flight = nil
+            flightDone = nil
+            if flight.kind == .opening { endFlight() }
+            ticker.stop()
+            done?()
+        }
+    }
+
+    /// Back on the stage, flat, no flight.
+    private func endFlight() {
+        flight = nil
+        flightDone = nil
+        flightStart = nil
+        layers = nil
+        hero.turn = 0
+        if let root, hero.superview !== root {
+            hero.layer.zPosition = 0
+            hero.transform = .identity
+            root.addSubview(hero)
+            hero.frame = root.bounds
+        }
+    }
+
+    /// Closing: the status bar turns back to the app's as the page shows through.
+    private func followAppStatusBarIfShowing() {
+        guard phase == .closing, !statusBarFollowsApp, heroState.backdrop < 0.5 else { return }
+        statusBarFollowsApp = true
+        #if !os(visionOS)
+        UIView.animate(withDuration: 0.2) { self.navigation?.setNeedsStatusBarAppearanceUpdate() }
+        #endif
     }
 
     // MARK: Hand-over
@@ -693,7 +790,13 @@ public final class ImagePreviewController {
     }
 
     private func handOver(_ frames: Int) {
-        if let frame = frame(of: closingSource), let state = sourceState(closingSource, at: frame) { setHero(state) }
+        if let world = flightWorld(closingSource), let state = sourceState(closingSource, at: world.slotFrame) {
+            setHero(state)
+            hero.turn = world.world.slot.turn
+            layers?.host(hero, level: 0)
+        } else if let frame = frame(of: closingSource), let state = sourceState(closingSource, at: frame) {
+            setHero(state)
+        }
         if frames > 1 { handoff = frames - 1 } else { finish() }
     }
 
@@ -921,23 +1024,14 @@ private final class HeroView: UIView {
         imageView.addSubview(view)
     }
 
-    /// Where it shows: under what covers the thumbnail outside `rect`; nil all over.
-    func setCover(_ rect: CGRect?) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        defer { CATransaction.commit() }
-        guard let rect else { return layer.mask = nil }
-        let cover = layer.mask ?? {
-            let mask = CALayer()
-            mask.backgroundColor = UIColor.black.cgColor
-            layer.mask = mask
-            return mask
-        }()
-        cover.frame = rect
-    }
+    /// How it's turned (a thumbnail lying at an angle), about the clip's centre.
+    var turn: CGFloat = 0
 
     func apply(_ state: HeroState) {
-        clipView.frame = state.clip
+        clipView.transform = .identity
+        clipView.bounds = CGRect(origin: .zero, size: state.clip.size)
+        clipView.center = CGPoint(x: state.clip.midX, y: state.clip.midY)
+        clipView.transform = turn == 0 ? .identity : CGAffineTransform(rotationAngle: turn)
         clipView.layer.cornerRadius = min(state.cornerRadius, min(state.clip.width, state.clip.height) / 2)
         imageView.frame = state.image.offsetBy(dx: -state.clip.minX, dy: -state.clip.minY)
         clipView.alpha = state.opacity

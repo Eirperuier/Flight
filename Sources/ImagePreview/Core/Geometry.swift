@@ -88,6 +88,20 @@ struct HeroState: Equatable {
         return HeroState(image: r, clip: r, cornerRadius: 0, backdrop: 0, opacity: 0)
     }
 
+    /// Part way from this to `other` (every value straight across).
+    func mixed(with other: HeroState, _ t: CGFloat) -> HeroState {
+        HeroState(zip(vector, other.vector).map { $0 + ($1 - $0) * Double(t) })
+    }
+
+    /// The same, moved so its clip's centre is at `point`.
+    func centred(at point: CGPoint) -> HeroState {
+        let dx = point.x - clip.midX, dy = point.y - clip.midY
+        var moved = self
+        moved.image = image.offsetBy(dx: dx, dy: dy)
+        moved.clip = clip.offsetBy(dx: dx, dy: dy)
+        return moved
+    }
+
     /// Per value, how close counts as arrived: a fraction of a point for geometry, less for opacities.
     static let tolerances: [Double] = [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.002, 0.002]
 
