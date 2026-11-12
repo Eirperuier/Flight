@@ -72,8 +72,8 @@ public final class ImagePreviewController {
     /// Opens the viewer over the view controller `view` is in.
     public func present(from view: UIView) {
         guard !isPresented, count > 0, var presenter = view.closestViewController else { return }
-        // A viewer still putting its last image home goes now.
-        for other in Self.retained.values where other.phase == .closed { other.retire() }
+        // A viewer still putting its last image home goes now (its image lands at once).
+        for other in Self.retained.values where other.phase == .closed || other.phase == .closing { other.landNow() }
         while let presented = presenter.presentedViewController, !presented.isBeingDismissed { presenter = presented }
         isPresented = true
         Self.retained[ObjectIdentifier(self)] = self
@@ -141,6 +141,8 @@ public final class ImagePreviewController {
     private var flightDone: (() -> Void)?
     /// Closing: the image as it was let go, which it changes from into its thumbnail.
     private var flightStart: HeroState?
+    /// Which flight a plan being chosen elsewhere is for.
+    private var flightSerial = 0
     /// The layers over the thumbnail the image flies from or to.
     private var layers: PreviewLayers?
     private var springs: SpringVector?
@@ -405,7 +407,8 @@ public final class ImagePreviewController {
             if let world = flightWorld(source), let start = sourceState(source, at: world.slotFrame) {
                 setHero(start)
                 hero.turn = world.world.slot.turn
-                return fly(.opening(world.world)) { [weak self] in self?.didSettlePresented() }
+                fly(.opening(world.world, planned: false)) { [weak self] in self?.didSettlePresented() }
+                return planElsewhere(world.world)
             }
             self.layers = nil
         }
@@ -429,6 +432,28 @@ public final class ImagePreviewController {
         hero.imageView.image = still
         hero.setLiveView(content(index).makeView(for: .flight))
         hero.isHidden = false
+    }
+
+    /// Over the page while the image flies home, taking only the touches on the image: wherever
+    /// the image is put among the page's views, a touch on it would go to what holds it, if that
+    /// even reaches it (it lies outside that view's bounds).
+    private lazy var catcher: PreviewTapCatcher = {
+        let catcher = PreviewTapCatcher()
+        catcher.contains = { [weak self] point, event in
+            guard let self, self.phase == .closing, !self.hero.isHidden, let window = self.catcher.window else { return false }
+            let clip = self.hero.clipView
+            return clip.point(inside: window.convert(point, to: clip), with: event)
+        }
+        catcher.onTap = { [weak self] in self?.reopen() }
+        return catcher
+    }()
+
+    private func catchTaps() {
+        guard let window = root?.window else { return }
+        if catcher.superview !== window || window.subviews.last !== catcher {
+            window.addSubview(catcher)
+        }
+        catcher.frame = window.bounds
     }
 
     private func hideHero() {
@@ -466,16 +491,17 @@ public final class ImagePreviewController {
         if !UIAccessibility.isReduceMotionEnabled, let view = source?.view, let root, visibleFrame(of: source) != nil {
             layers = PreviewLayers(thumbnail: view, stage: root)
             if let world = flightWorld(source) {
-                // The finger's velocity, all of it: the spring turns it home.
-                var v = velocity
-                let speed = hypot(v.x, v.y), cap: CGFloat = 4000
-                if speed > cap { v = CGPoint(x: v.x * cap / speed, y: v.y * cap / speed) }
+                // The finger's velocity as a close without layers keeps it, on the same spring.
+                let w = world.world, center = heroState.clip.center, size = heroState.clip.size, backdrop = heroState.backdrop
+                let v = PreviewFlight.released(CGVector(dx: velocity.x, dy: velocity.y), from: center, toward: w.slot.center)
+                let spring = configuration.transitionSpring
+                let omega = 2 * Double.pi / max(spring.response, 0.01), zeta = spring.dampingRatio
                 stopSprings()
                 flightStart = heroState
-                return fly(.closing(world.world, center: heroState.clip.center, size: heroState.clip.size,
-                                    velocity: CGVector(dx: v.x, dy: v.y), backdrop: heroState.backdrop)) { [weak self] in
+                fly(.closing(w, center: center, size: size, velocity: v, backdrop: backdrop, omega: omega, zeta: zeta, planned: false)) { [weak self] in
                     self?.didClose()
                 }
+                return planElsewhere(w)
             }
             layers = nil
         }
@@ -718,6 +744,8 @@ public final class ImagePreviewController {
     }
 
     private func fly(_ flight: PreviewFlight, completion: @escaping () -> Void) {
+        flightSerial += 1
+        pendingPlan = nil
         self.flight = flight
         flightDone = completion
         stepFlight(0)
@@ -738,7 +766,14 @@ public final class ImagePreviewController {
             }
             return
         }
-        if dt > 0 { flight.advance(dt, world: now.world) }
+        if dt > 0, var planned = pendingPlan, flight.clock + dt >= planned.clock {
+            // Where the plan was made for: the planned flight from here on.
+            pendingPlan = nil
+            planned.advance(flight.clock + dt - planned.clock, world: now.world)
+            flight = planned
+        } else if dt > 0 {
+            flight.advance(dt, world: now.world)
+        }
         self.flight = flight
         let clip = flight.clip(now.world), g = CGFloat(flight.progress)
         guard let slotState = sourceState(source, at: now.slotFrame) else { return }
@@ -754,6 +789,7 @@ public final class ImagePreviewController {
         hero.apply(state)
         backdrop.alpha = state.backdrop
         layers?.host(hero, level: flight.level)
+        if flight.kind == .closing { catchTaps() } else { catcher.removeFromSuperview() }
         if flight.kind == .closing { followAppStatusBarIfShowing() }
         if flight.isDone {
             let done = flightDone
@@ -765,12 +801,89 @@ public final class ImagePreviewController {
         }
     }
 
+    /// The flight's way among the layers is chosen off the main thread (rehearsing it ahead takes
+    /// a while, long in a debug build), for where the image will be by the time it's ready; the
+    /// image flies on unplanned till then (opening: still where it is; closing: straight home)
+    /// and the planned flight takes its place as it gets there, the same flight up to that moment.
+    private func planElsewhere(_ world: FlightWorld) {
+        guard let flight else { return }
+        let serial = flightSerial
+        let ahead = max(1.0 / 30, Self.planCost * 1.5 + 1.0 / 60)
+        Task.detached(priority: .userInitiated) {
+            let start = Date()
+            let planned = flight.plannedAhead(by: ahead, world: world)
+            let cost = Date().timeIntervalSince(start)
+            await MainActor.run { [weak self] in
+                Self.planCost = cost
+                self?.adopt(planned, for: serial)
+            }
+        }
+    }
+
+    /// How long the last plan took to choose.
+    private static var planCost = 0.06
+    /// A plan come before the flight got where it was made for.
+    private var pendingPlan: PreviewFlight?
+
+    private func adopt(_ planned: PreviewFlight, for serial: Int) {
+        guard serial == flightSerial, var flight, !flight.isDone else { return }
+        if flight.clock <= planned.clock {
+            pendingPlan = planned
+            return
+        }
+        // Late: its plan, eased in from here.
+        let source = flight.kind == .opening ? hiddenSource : closingSource
+        guard let now = flightWorld(source) else { return }
+        flight.adoptPlan(of: planned, world: now.world)
+        self.flight = flight
+    }
+
+    /// The image flying home tapped: it turns back and opens again from where it is.
+    fileprivate func reopen() {
+        guard phase == .closing, let flight, flight.kind == .closing, let source = closingSource, let world = flightWorld(source) else { return }
+        let clip = flight.clip(world.world)
+        let from = (center: clip.center, size: clip.size, velocity: flight.velocity, level: flight.level)
+        phase = .opening
+        transitioning.presentation?.passesTouches = false
+        landing = nil
+        hiddenSource = source
+        closingSource = nil
+        flightStart = nil
+        if statusBarFollowsApp {
+            statusBarFollowsApp = false
+            #if !os(visionOS)
+            UIView.animate(withDuration: 0.2) { self.navigation?.setNeedsStatusBarAppearanceUpdate() }
+            #endif
+        }
+        setAccessories(visible: true, delay: 0.06)
+        onIndexChange?(index)
+        fly(.opening(world.world, from: from, planned: false)) { [weak self] in self?.didSettlePresented() }
+        planElsewhere(world.world)
+    }
+
+    /// Another viewer opens: this one's image, still flying home, lands at once.
+    private func landNow() {
+        if phase == .closing {
+            flight = nil
+            flightDone = nil
+            stopSprings()
+            phase = .closed
+            closingSource?.setHidden(false)
+            hiddenSource = nil
+            landing = nil
+            contents.values.forEach { $0.cancel() }
+            onDidDismiss?()
+        }
+        finish()
+    }
+
     /// Back on the stage, flat, no flight.
     private func endFlight() {
         flight = nil
         flightDone = nil
         flightStart = nil
         layers = nil
+        catcher.removeFromSuperview()
         hero.turn = 0
         if let root, hero.superview !== root {
             hero.layer.zPosition = 0
@@ -1021,11 +1134,16 @@ private final class HeroView: UIView {
         shade.isUserInteractionEnabled = false
         addSubview(shade)
         addSubview(clipView)
+
         isHidden = true
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Never in the way of a touch: it lies over the whole page (a tap on the image flying home
+    /// is caught over the page, `PreviewTapCatcher`).
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { false }
 
     private var liveView: UIView?
 
@@ -1061,6 +1179,28 @@ private final class HeroView: UIView {
         shade.frame = bounds
         shadow?.apply(center: CGPoint(x: state.clip.midX, y: state.clip.midY), size: state.clip.size, turn: turn,
                       seen: (1 - state.backdrop) * state.opacity)
+    }
+}
+
+/// Takes only the touches `contains` says are its own (on the image flying home), and lets every
+/// other one through to the page under it.
+private final class PreviewTapCatcher: UIView {
+    var contains: (CGPoint, UIEvent?) -> Bool = { _, _ in false }
+    var onTap: (() -> Void)?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func tapped() { onTap?() }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        contains(convert(point, to: window), event)
     }
 }
 

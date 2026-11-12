@@ -54,7 +54,7 @@ That's it. The sections below cover the rest: buttons on the bars, UIKit and App
 Swift Package Manager:
 
 ```swift
-.package(url: "https://github.com/Eirperuier/ImagePreview.git", from: "0.6.0")
+.package(url: "https://github.com/Eirperuier/ImagePreview.git", from: "0.6.1")
 ```
 
 Requires iOS 17, Mac Catalyst 17, macOS 14 or visionOS 1.
@@ -140,7 +140,7 @@ preview.present(from: view)
 
 The source closure is asked again when the viewer closes, so after scrolling the collection view to the image on screen, the image lands in the right cell. If there is no thumbnail on screen, the image fades out where it is.
 
-On iOS the image flies among the page's layers. Whatever is drawn over the thumbnail (a bar, a composer, the next picture of a group lying on it) really stays over the image: opening, the image first slides out from under it, still in the page, and rises above each layer only once none of that layer lies on it; closing, it drops under each layer where it's clear of it and slides home underneath. It never cuts off and nothing ever pops over or under it. The motion is one spring for place and size, carried on with the finger's speed when you let go, and it follows the page if the page scrolls meanwhile. Nothing to set: the layers are read off the view tree.
+On iOS the image flies among the page's layers. Whatever is drawn over the thumbnail (a bar, a composer, the next picture of a group lying on it) really stays over the image: opening, the image first slides out from under it, still in the page, and rises above each layer only once none of that layer lies on it; closing, it drops under each layer where it's clear of it and slides home underneath. It never cuts off and nothing ever pops over or under it. Let go, it keeps the finger's speed as a close without layers does (all of it toward home, a third of the rest) on the same spring; tap it on its way home and it opens again from where it is, and the rest of the page takes touches as usual meanwhile. The motion is one spring for place and size, carried on with the finger's speed when you let go, and it follows the page if the page scrolls meanwhile. Nothing to set: the layers are read off the view tree.
 
 The image casts a shadow as it rises: the higher (the bigger), the further down it falls, the softer and the fainter, in the image's own colour darkened (near black in Dark Mode, where it shows only on what is lit), fading as the backdrop comes. If the thumbnail itself lies on the page with a shadow, pass its height as `PreviewSource(view:cornerRadius:elevation:)` (4 points for a picture lying on others) and the image lifts off from that shadow; without it the shadow comes as the image rises. It is drawn once per flight and only moved and faded while it flies.
 

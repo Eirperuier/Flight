@@ -46,22 +46,32 @@ struct TurnedRect: Equatable {
         return [(-w, -h), (w, -h), (w, h), (-w, h)].map { CGPoint(x: center.x + $0.0 * c - $0.1 * s, y: center.y + $0.0 * s + $0.1 * c) }
     }
 
-    fileprivate var normals: [CGVector] {
-        [CGVector(dx: cos(turn), dy: sin(turn)), CGVector(dx: -sin(turn), dy: cos(turn))]
-    }
-
-    fileprivate func shadow(_ n: CGVector) -> (CGFloat, CGFloat) {
-        let half = abs(size.width / 2 * (cos(turn) * n.dx + sin(turn) * n.dy)) + abs(size.height / 2 * (-sin(turn) * n.dx + cos(turn) * n.dy))
-        let m = center.x * n.dx + center.y * n.dy
+    /// Its extent along the unit vector `(nx, ny)`, its own turn's cosine and sine being `c` and `s`.
+    @inline(__always)
+    private func shadow(_ nx: CGFloat, _ ny: CGFloat, _ c: CGFloat, _ s: CGFloat) -> (CGFloat, CGFloat) {
+        let half = abs(size.width / 2 * (c * nx + s * ny)) + abs(size.height / 2 * (-s * nx + c * ny))
+        let m = center.x * nx + center.y * ny
         return (m - half, m + half)
     }
 
     /// How far this has to move along `u` (a unit vector) to be clear of `other`: 0 if it is,
-    /// infinity if it never gets clear that way. Closed form (separating axes).
+    /// infinity if it never gets clear that way. Closed form (separating axes). Run every
+    /// frame of every rehearsal: no allocation, and far apart is settled first.
     func clearance(from other: TurnedRect, along u: CGVector) -> CGFloat {
+        let reach = (hypot(size.width, size.height) + hypot(other.size.width, other.size.height)) / 2
+        let dx = center.x - other.center.x, dy = center.y - other.center.y
+        if dx * dx + dy * dy >= reach * reach { return 0 }
+        let c1 = cos(turn), s1 = sin(turn), c2 = cos(other.turn), s2 = sin(other.turn)
         var best = CGFloat.infinity
-        for n in normals + other.normals {
-            let (a0, a1) = shadow(n), (b0, b1) = other.shadow(n), k = u.dx * n.dx + u.dy * n.dy
+        for axis in 0..<4 {
+            let nx: CGFloat, ny: CGFloat
+            switch axis {
+            case 0: nx = c1; ny = s1
+            case 1: nx = -s1; ny = c1
+            case 2: nx = c2; ny = s2
+            default: nx = -s2; ny = c2
+            }
+            let (a0, a1) = shadow(nx, ny, c1, s1), (b0, b1) = other.shadow(nx, ny, c2, s2), k = u.dx * nx + u.dy * ny
             if a1 <= b0 || a0 >= b1 { return 0 }
             if k > 1e-6 { best = min(best, (b1 - a0) / k) } else if k < -1e-6 { best = min(best, (b0 - a1) / k) }
         }
@@ -115,10 +125,9 @@ struct PreviewFlight {
     /// comes out from under the layers, easing back over `lift` once over them all, so it
     /// starts briskly and no force jumps.
     static let openOmega = 20.0, escapeOmega = 30.0
-    /// Closing: home is a pull of its own, the same however it's let go (a little under critical,
-    /// so a throw carries on as a throw does); the finger only gives it its velocity. The size
-    /// goes home on a quicker spring of its own, small by the time it gets anywhere.
-    static let homeOmega = 13.0, homeZeta = 0.8, homeSizeOmega = 26.0
+    /// Closing: the viewer's own closing spring (`ImagePreviewConfiguration.transitionSpring`),
+    /// for the place and the size alike, as a close with nothing over the thumbnail has it.
+    static let homeOmega = 2 * Double.pi / PreviewSpring.transition.response, homeZeta = PreviewSpring.transition.dampingRatio
     /// The goal eases in from rest over `emerge` (barely: it starts at once), and from one aim to
     /// the next over `lift`.
     static let emerge = 0.05, lift = 0.25
@@ -143,8 +152,8 @@ struct PreviewFlight {
     /// Opening: its progress, and the time, when it got over everything (the backdrop starts from there).
     private var overAt: Double?
     private var overClock: Double?
-    /// Closing: when its size's goal started easing in (earlier when planned again on the way).
-    private var sizeStart: Double = 0
+    /// Closing: the spring home, ω and damping ratio.
+    private var home = (omega: Self.homeOmega, zeta: Self.homeZeta)
     /// Closing: how long it has been waiting, still, under a layer it can't get clear of.
     private var stuck: Double = 0
     /// Closing: the clip's size and the backdrop as it was let go.
@@ -156,23 +165,102 @@ struct PreviewFlight {
     private var goal: [Leg] = []
     private var rehearsing = false
     private var lastSeen: (half: CGFloat, speed: Double)?
+    /// The way-out spots, as read off the page for the slot where it was (read again when it moves).
+    private var spotsRead: (slot: TurnedRect, at: [CGPoint])?
     /// Every layer change so far, for whoever wants to check them: (time, from level, to level).
     private(set) var changes: [(t: Double, from: Int, to: Int)] = []
 
     // MARK: Starting
 
-    /// Opening from the thumbnail at rest.
-    static func opening(_ world: FlightWorld) -> PreviewFlight {
-        var flight = PreviewFlight(kind: .opening, center: world.slot.center, velocity: .zero, world: world, releaseSize: world.slot.size, releaseBackdrop: 0)
-        flight.choosePlan(world, pageVelocity: .zero)
+    /// Opening from the thumbnail at rest; or, given `from`, from an image flying home (a clip of
+    /// that size at that centre, that velocity, over `level` of the layers), turned back.
+    /// - Parameter planned: chosen ahead now; else it goes straight for the middle until a plan
+    ///   chosen elsewhere is handed to it (`adoptPlan`).
+    static func opening(_ world: FlightWorld, from: (center: CGPoint, size: CGSize, velocity: CGVector, level: Int)? = nil, planned: Bool = true) -> PreviewFlight {
+        var flight = PreviewFlight(kind: .opening, center: from?.center ?? world.slot.center, velocity: from?.velocity ?? .zero, world: world,
+                                   releaseSize: world.slot.size, releaseBackdrop: 0)
+        if let from {
+            let s = world.slot.size, f = world.fitted.size
+            let g = max(f.width - s.width, f.height - s.height) > 1
+                ? Double((hypot(from.size.width, from.size.height) - hypot(s.width, s.height)) / (hypot(f.width, f.height) - hypot(s.width, s.height)))
+                : 0
+            flight.progress = min(max(g, 0), 1)
+            flight.level = min(max(from.level, 0), world.covers.count)
+        }
+        if planned { flight.choosePlan(world, pageVelocity: .zero) } else { flight.startStraight(world) }
         return flight
     }
 
-    /// Closing into the thumbnail, from a clip of `size` at `center` moving at `velocity` with the backdrop at `backdrop`.
-    static func closing(_ world: FlightWorld, center: CGPoint, size: CGSize, velocity: CGVector, backdrop: CGFloat, pageVelocity: CGVector = .zero) -> PreviewFlight {
+    /// Closing into the thumbnail, from a clip of `size` at `center` moving at `velocity` with
+    /// the backdrop at `backdrop`, on the spring `omega`, `zeta`.
+    static func closing(_ world: FlightWorld, center: CGPoint, size: CGSize, velocity: CGVector, backdrop: CGFloat, pageVelocity: CGVector = .zero,
+                        omega: Double = homeOmega, zeta: Double = homeZeta, planned: Bool = true) -> PreviewFlight {
         var flight = PreviewFlight(kind: .closing, center: center, velocity: velocity, world: world, releaseSize: size, releaseBackdrop: backdrop)
-        flight.choosePlan(world, pageVelocity: pageVelocity)
+        flight.home = (omega, zeta)
+        if planned { flight.choosePlan(world, pageVelocity: pageVelocity) } else { flight.startStraight(world) }
         return flight
+    }
+
+    /// The finger's velocity as the image keeps it when let go, as a close with nothing over the
+    /// thumbnail has it: all of it toward home, a third of the rest; capped.
+    static func released(_ v: CGVector, from: CGPoint, toward home: CGPoint) -> CGVector {
+        let distance = hypot(home.x - from.x, home.y - from.y)
+        var out = CGVector(dx: v.dx * 0.3, dy: v.dy * 0.3)
+        if distance > 1 {
+            let d = CGVector(dx: (home.x - from.x) / distance, dy: (home.y - from.y) / distance)
+            let along = v.dx * d.dx + v.dy * d.dy
+            if along > 0 {
+                out = CGVector(dx: d.dx * along + (v.dx - d.dx * along) * 0.3, dy: d.dy * along + (v.dy - d.dy * along) * 0.3)
+            }
+        }
+        let speed = hypot(out.dx, out.dy), cap: CGFloat = 2500
+        if speed > cap { out = CGVector(dx: out.dx * cap / speed, dy: out.dy * cap / speed) }
+        return out
+    }
+
+    /// Till a plan comes (`adoptPlan`): opening, it waits where it is (a frame or two; it was
+    /// planned from there, so it goes on just as planned); closing, straight home with the finger's
+    /// velocity. If none comes, opening goes straight for the middle after a while.
+    private mutating func startStraight(_ world: FlightWorld) {
+        if kind == .opening { changeLayers(world, clip(world)); changes = [] }
+        setPlan(world, stages: [], margin: Self.margins[0], grow: 0, times: nil)
+        if kind == .opening {
+            goal = [Leg(aim: .fixed(center, 1, progress), t0: clock, duration: 0), Leg(aim: .centre, t0: clock + Self.planWait, duration: Self.emerge)]
+        }
+    }
+
+    /// How long an opening waits for its plan before going without one.
+    static let planWait = 0.3
+
+    /// This flight as it will be `delay` on, with its plan chosen there: made off the main
+    /// thread while this one flies on unplanned, and put in its place when it gets there (it is
+    /// the same flight till then, so nothing shows).
+    func plannedAhead(by delay: Double, world: FlightWorld, pageVelocity v: CGVector = .zero) -> PreviewFlight {
+        var copy = self
+        var left = delay
+        while left > 1e-9 {
+            let h = min(left, 0.05)
+            left -= h
+            copy.advance(h, world: world.shifted(CGVector(dx: v.dx * (delay - left), dy: v.dy * (delay - left))))
+        }
+        copy.choosePlan(world.shifted(CGVector(dx: v.dx * delay, dy: v.dy * delay)), pageVelocity: v)
+        return copy
+    }
+
+    /// Takes the plan `other` chose (the same flight, planned elsewhere from the same start):
+    /// its goal from now on, eased in from the one so far.
+    mutating func adoptPlan(of other: PreviewFlight, world: FlightWorld) {
+        let from = goalValue(world)
+        plan = other.plan
+        // Its bend times counted from when it was chosen: from now, as its goal starts now.
+        plan.times = plan.times.map { $0 + (clock - other.clock) }
+        plan.next = 0
+        plan.fired = Array(repeating: nil, count: plan.events.count)
+        spotsRead = nil
+        // From where the goal is, easing into the plan's first aim, so no force jumps.
+        goal = [Leg(aim: .fixed(from.point, from.w, from.g), t0: clock, duration: 0), Leg(aim: plan.aims[0], t0: clock, duration: Self.emerge)]
+        // Events already done on the way here.
+        bend(world)
     }
 
     private init(kind: Kind, center: CGPoint, velocity: CGVector, world: FlightWorld, releaseSize: CGSize, releaseBackdrop: CGFloat) {
@@ -260,13 +348,11 @@ struct PreviewFlight {
             velocity.dy += (w * w * (target.point.y - center.y) - 2 * w * velocity.dy) * h
             progressVelocity += (w * w * (target.g - progress) - 2 * w * progressVelocity) * h
         case .closing:
-            let w = Self.homeOmega, z = Self.homeZeta, s = Self.homeSizeOmega
+            let w = home.omega, z = home.zeta
             velocity.dx += (w * w * (target.point.x - center.x) - 2 * z * w * velocity.dx) * h
             velocity.dy += (w * w * (target.point.y - center.y) - 2 * z * w * velocity.dy) * h
-            // Its size goes home from the moment it's let go, the goal eased in; damped against
-            // rest, not the eased goal's own speed: the ease only softens the start.
-            let u = Self.ease((clock - sizeStart) / Self.lift)
-            progressVelocity += (s * s * (u - progress) - 2 * s * progressVelocity) * h
+            // Its size goes home on the same spring from the moment it's let go.
+            progressVelocity += (w * w * (1 - progress) - 2 * z * w * progressVelocity) * h
         }
         center.x += velocity.dx * h
         center.y += velocity.dy * h
@@ -290,7 +376,6 @@ struct PreviewFlight {
         stuck = level > 0 && backdrop < 0.02 && hypot(velocity.dx, velocity.dy) < 8 ? stuck + h : 0
         guard stuck > 0.15 else { return false }
         stuck = 0
-        sizeStart = min(sizeStart, clock - Self.lift)
         choosePlan(world, pageVelocity: pageVelocity())
         return true
     }
@@ -334,7 +419,7 @@ struct PreviewFlight {
 
     // MARK: Aims and the goal
 
-    enum Aim: Equatable { case slot, spot(Int), centre }
+    enum Aim: Equatable { case slot, spot(Int), centre, fixed(CGPoint, Double, Double) }
 
     /// The plan: the aims in the order it goes by them, the way-out stages (outward from the
     /// thumbnail) the spots are read from, and the event that ends each aim but the last.
@@ -357,20 +442,26 @@ struct PreviewFlight {
     static let leans: [CGFloat] = [0.3, 4]
 
     private struct Leg { var aim: Aim; var t0: Double; var duration: Double }
+    // (A leg starting later holds the goal where the legs before it have it till then.)
 
-    private func aimValue(_ aim: Aim, _ world: FlightWorld) -> (point: CGPoint, w: Double, g: Double) {
+    private mutating func aimValue(_ aim: Aim, _ world: FlightWorld) -> (point: CGPoint, w: Double, g: Double) {
         switch aim {
         case .slot: return (world.slot.center, 1, kind == .opening ? 0 : 1)
         case .centre: return (CGPoint(x: world.fitted.midX, y: world.fitted.midY), 0, 1)
+        case .fixed(let point, let w, let g): return (point, w, g)
         case .spot(let k):
-            // Each spot read from the last, where the page has it now.
-            var base = world.slot.center
-            for j in 0...k {
-                let stage = plan.stages[j]
-                let d = world.clearance(world.slot.at(base), from: stage.layers, along: stage.dir) * plan.margin.k + plan.margin.add
-                base = CGPoint(x: base.x + stage.dir.dx * d, y: base.y + stage.dir.dy * d)
+            // Each spot read from the last, where the page has it now; the same while the slot
+            // stays where it is (a rehearsal on a still page reads them once).
+            if spotsRead?.slot != world.slot || (spotsRead?.at.count ?? 0) != plan.stages.count {
+                var base = world.slot.center, at: [CGPoint] = []
+                for stage in plan.stages {
+                    let d = world.clearance(world.slot.at(base), from: stage.layers, along: stage.dir) * plan.margin.k + plan.margin.add
+                    base = CGPoint(x: base.x + stage.dir.dx * d, y: base.y + stage.dir.dy * d)
+                    at.append(base)
+                }
+                spotsRead = (world.slot, at)
             }
-            return (base, 1, kind == .opening ? plan.grow : 0)
+            return (spotsRead!.at[k], 1, kind == .opening ? plan.grow : 0)
         }
     }
 
@@ -523,9 +614,10 @@ struct PreviewFlight {
         plan.times = times ?? Array(repeating: .infinity, count: plan.events.count)
         plan.fired = Array(repeating: nil, count: plan.events.count)
         self.plan = plan
+        spotsRead = nil
         switch kind {
         case .opening:
-            goal = [Leg(aim: .slot, t0: clock, duration: 0)]
+            goal = [Leg(aim: .fixed(center, 1, progress), t0: clock, duration: 0)]
             aim(at: plan.aims[0], over: Self.emerge)
         case .closing:
             goal = [Leg(aim: plan.aims[0], t0: clock, duration: 0)]
@@ -543,7 +635,7 @@ struct PreviewFlight {
         // Nothing lies on it: straight there.
         guard world.overlapping(world.slot, Array(world.covers.indices)) else { return setPlan(world, stages: [], margin: Self.margins[0], grow: 0, times: nil) }
         let all = Array(world.covers.indices)
-        let ahead = CGPoint(x: center.x + velocity.dx / Self.homeOmega, y: center.y + velocity.dy / Self.homeOmega)
+        let ahead = CGPoint(x: center.x + velocity.dx / home.omega, y: center.y + velocity.dy / home.omega)
         let want: (CGPoint) -> CGPoint = kind == .opening ? { _ in CGPoint(x: world.fitted.midX, y: world.fitted.midY) } : { _ in ahead }
         // Closing: rehearsed as far as home in all but the last creep.
         let slot = world.slot.center

@@ -77,3 +77,36 @@ func theLayersStayRightWhileThePageMoves(_ i: Int, _ scroll: Double, _ page: Dou
     _ = fly(&closing, i, scroll: scroll, page: page)
     #expect(closing.isDone && closing.level == 0)
 }
+
+/// Planned ahead elsewhere while it flies on unplanned, then put in its place where it was
+/// planned for: the same as planned at once, shifted by the wait.
+@Test(arguments: [(0, -40.0), (1, 60.0), (2, 380.0)])
+func aPlanMadeAheadTakesOverWhereItWasMadeFor(_ i: Int, _ scroll: Double) {
+    let w = world(i, scroll: scroll)
+    let v = PreviewFlight.released(CGVector(dx: 240, dy: 1200), from: CGPoint(x: 250, y: 620), toward: w.slot.center)
+    let flights = [PreviewFlight.opening(w, planned: false),
+                   PreviewFlight.closing(w, center: CGPoint(x: 250, y: 620), size: CGSize(width: 300, height: 400), velocity: v, backdrop: 0.4, planned: false)]
+    for start in flights {
+        var flight = start
+        var planned = flight.plannedAhead(by: 0.1, world: w)
+        while flight.clock + 1.0 / 60 < planned.clock { flight.advance(1.0 / 60, world: w) }
+        flight.advance(planned.clock - flight.clock, world: w)
+        // Up to there the same flight: nothing shows as the planned one takes over.
+        #expect(hypot(flight.center.x - planned.center.x, flight.center.y - planned.center.y) < 1)
+        _ = fly(&planned, i, scroll: scroll)
+        #expect(planned.isDone && !planned.landedUncleared)
+        #expect(start.kind == .opening ? planned.isOverAll : planned.level == 0)
+        #expect(planned.clock < 1.6)
+    }
+}
+
+@Test(arguments: [(0, -40.0), (1, 60.0), (2, 380.0)])
+func aTapOnTheWayHomeOpensItAgain(_ i: Int, _ scroll: Double) {
+    let w = world(i, scroll: scroll)
+    var closing = PreviewFlight.closing(w, center: CGPoint(x: 250, y: 620), size: CGSize(width: 300, height: 400), velocity: .zero, backdrop: 0.4)
+    for _ in 0..<60 { closing.advance(1.0 / 240, world: w) }
+    let clip = closing.clip(w)
+    var opening = PreviewFlight.opening(w, from: (clip.center, clip.size, closing.velocity, closing.level))
+    _ = fly(&opening, i, scroll: scroll)
+    #expect(opening.isDone && opening.isOverAll)
+}
