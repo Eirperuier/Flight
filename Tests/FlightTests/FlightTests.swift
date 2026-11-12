@@ -50,6 +50,21 @@ import UIKit
     group.stop()
 }
 
+@MainActor @Test func aPieceSetsOffAtTheFingersSpeed() {
+    let piece = FlightPiece(from: FlightPlace(frame: CGRect(x: 0, y: 0, width: 10, height: 10)), velocity: CGPoint(x: 900, y: 0), target: { nil }) { _ in }
+    // No target yet: it coasts on its speed.
+    let group = FlightGroup(pieces: [piece])
+    group.step(1.0 / 120)
+    #expect(piece.place.center.x > 5)
+}
+
+@Test func placesMix() {
+    let a = FlightPlace(frame: CGRect(x: 0, y: 0, width: 10, height: 10), corner: 2, extras: [0])
+    let b = FlightPlace(frame: CGRect(x: 100, y: 0, width: 30, height: 10), corner: 6, extras: [1])
+    let m = a.mixed(with: b, 0.5)
+    #expect(m.size.width == 20 && m.corner == 4 && m.extras == [0.5])
+}
+
 @MainActor @Test func aPieceIgnoresTouches() {
     let view = UIView()
     _ = FlightPiece(view: view, from: FlightPlace(frame: .zero), target: { nil })

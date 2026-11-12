@@ -22,6 +22,13 @@ public struct FlightPlace: Equatable, Sendable {
         self.init(center: CGPoint(x: frame.midX, y: frame.midY), size: frame.size, turn: turn, corner: corner, extras: extras)
     }
 
+    /// `fraction` of the way from this place to `other`, each value straight between.
+    public func mixed(with other: FlightPlace, _ fraction: CGFloat) -> FlightPlace {
+        let a = vector, b = other.vector
+        guard a.count == b.count else { return fraction < 0.5 ? self : other }
+        return FlightPlace(zip(a, b).map { $0 + ($1 - $0) * Double(fraction) })
+    }
+
     public var frame: CGRect {
         CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2, width: size.width, height: size.height)
     }
@@ -58,25 +65,30 @@ public final class FlightPiece {
 
     /// - Parameters:
     ///   - from: where it starts.
+    ///   - velocity: how fast its middle is moving as it sets off (a finger's, let go), points a second.
     ///   - target: where it goes, read every frame.
     ///   - delay: seconds before it sets off.
     ///   - apply: puts it at a place; called every frame it moves.
-    public init(from: FlightPlace, delay: Double = 0, target: @escaping () -> FlightPlace?, apply: @escaping (FlightPlace) -> Void) {
+    public init(from: FlightPlace, velocity: CGPoint = .zero, delay: Double = 0, target: @escaping () -> FlightPlace?, apply: @escaping (FlightPlace) -> Void) {
         self.target = target
         self.apply = apply
         self.delay = delay
         let values = from.vector
         let tolerances = [0.25, 0.25, 0.25, 0.25, 0.001, 0.1] + Array(repeating: 0.002, count: from.extras.count)
         springs = SpringVector(values: values, tolerances: tolerances, spring: .transition)
+        var velocities = Array(repeating: 0.0, count: values.count)
+        velocities[0] = Double(velocity.x)
+        velocities[1] = Double(velocity.y)
+        springs.set(values: values, velocities: velocities)
         aim = from
     }
 
     /// A view flying: placed by centre, bounds and turn, its layer's corners rounded. It never
     /// takes touches, so what lies under it can still be scrolled and tapped while it flies.
-    public convenience init(view: UIView, from: FlightPlace, delay: Double = 0, target: @escaping () -> FlightPlace?,
+    public convenience init(view: UIView, from: FlightPlace, velocity: CGPoint = .zero, delay: Double = 0, target: @escaping () -> FlightPlace?,
                             extras: ((FlightPlace) -> Void)? = nil) {
         view.isUserInteractionEnabled = false
-        self.init(from: from, delay: delay, target: target) { [weak view] place in
+        self.init(from: from, velocity: velocity, delay: delay, target: target) { [weak view] place in
             guard let view else { return }
             view.bounds = CGRect(origin: .zero, size: place.size)
             view.center = place.center
