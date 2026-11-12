@@ -310,12 +310,16 @@ struct PreviewFlight {
 
     /// Advances by `dt` on the page as it is now.
     mutating func advance(_ dt: Double, world: FlightWorld) {
-        // The page moved under it: it moves with it as much as its goal does.
+        // The page moved under it: opening, it moves with it as much as its goal does; closing,
+        // all the way, as the page's own: it's going home into the page, and its way there (round
+        // what lies on its place) is the page's too. Carried by less, it lags the page and drifts
+        // off its way, waiting by a layer for the place the page has taken elsewhere.
         let d = CGVector(dx: world.slot.center.x - lastSlot.x, dy: world.slot.center.y - lastSlot.y)
         lastSlot = world.slot.center
         if d.dx != 0 || d.dy != 0 {
-            center.x += d.dx * attach
-            center.y += d.dy * attach
+            let carried = kind == .closing ? 1 : attach
+            center.x += d.dx * carried
+            center.y += d.dy * carried
             plan.moved += hypot(d.dx, d.dy)
             pageMoves.append((clock, d))
         }
