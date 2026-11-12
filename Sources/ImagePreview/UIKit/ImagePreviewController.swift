@@ -911,6 +911,9 @@ public final class ImagePreviewController {
     /// scrolling, so the two never part; then the image goes.
     private func handOverOrFinish() {
         guard heroState.opacity > 0, closingSource != nil else { return finish() }
+        // The thumbnail shows again under the image, its own shadow with it: the image's would
+        // darken it twice for these frames.
+        hero.shadow = nil
         handoff = 4
         ticker.start()
     }
