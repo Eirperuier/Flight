@@ -34,7 +34,9 @@ public struct PreviewSource {
         self.setHidden = { [weak view] hidden in view?.isHidden = hidden }
     }
 
-    init(view: PreviewPlatformView, cornerRadius: CGFloat, contentMode: PreviewContentMode, elevation: CGFloat? = nil, setHidden: @escaping (Bool) -> Void) {
+    /// A thumbnail whose owner hides it its own way (a stack that places its cards itself and
+    /// would otherwise show one the viewer hid).
+    public init(view: PreviewPlatformView, cornerRadius: CGFloat = 0, contentMode: PreviewContentMode = .fill, elevation: CGFloat? = nil, setHidden: @escaping (Bool) -> Void) {
         self.view = view
         self.elevation = elevation
         self.cornerRadius = cornerRadius

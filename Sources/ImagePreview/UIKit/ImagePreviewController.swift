@@ -326,8 +326,10 @@ public final class ImagePreviewController {
         guard i != context.index else { return }
         context.index = i
         updateContentState()
-        if phase != .closed, phase != .closing { hideSource() }
+        // The owner first, so the thumbnail hidden is the one it shows the image in now (a
+        // stack gives one only while it's on top).
         onIndexChange?(i)
+        if phase != .closed, phase != .closing { hideSource() }
     }
 
     private var currentPage: PreviewPageView? { pages[index] }
