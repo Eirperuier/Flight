@@ -109,9 +109,10 @@ public final class ElevationShadow {
         format.opaque = false
         let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
             let cg = context.cgContext
-            // The shape far off the image; only its shadow lands on it. Offset and blur are in pixels.
+            // The shape far off the image; only its shadow lands on it. The renderer's context
+            // has its scale in its base space, so a shadow's offset and blur are in points here.
             let away: CGFloat = 10_000
-            cg.setShadow(offset: CGSize(width: away * scale, height: 0), blur: blur * scale, color: color)
+            cg.setShadow(offset: CGSize(width: away, height: 0), blur: blur, color: color)
             cg.setFillColor(gray: 0, alpha: 1)
             cg.addPath(UIBezierPath(roundedRect: CGRect(x: pad - away, y: pad, width: shape.width, height: shape.height),
                                     cornerRadius: min(corner, min(shape.width, shape.height) / 2)).cgPath)

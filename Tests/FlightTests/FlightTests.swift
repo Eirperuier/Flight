@@ -70,4 +70,25 @@ import UIKit
     _ = FlightPiece(view: view, from: FlightPlace(frame: .zero), target: { nil })
     #expect(!view.isUserInteractionEnabled)
 }
+
+/// The shadow's drawn blurs hold the shadow: some of their pixels are seen (on every platform,
+/// the Mac's included, whatever its drawing context's scale).
+@MainActor @Test func elevationShadowSpritesAreDrawn() throws {
+    let shadow = ElevationShadow(image: nil, shape: CGSize(width: 200, height: 260), corner: 18, rest: 4,
+                                 full: CGSize(width: 800, height: 1000), dark: false)
+    for layer in shadow.layers {
+        let sprite = try #require(layer.contents as! CGImage?)
+        var px = [UInt8](repeating: 0, count: sprite.width * sprite.height * 4)
+        let drawn = px.withUnsafeMutableBytes { buffer in
+            CGContext(data: buffer.baseAddress, width: sprite.width, height: sprite.height, bitsPerComponent: 8,
+                      bytesPerRow: sprite.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+                .map { $0.draw(sprite, in: CGRect(x: 0, y: 0, width: sprite.width, height: sprite.height)); return true } ?? false
+        }
+        #expect(drawn)
+        let alphas = stride(from: 3, to: px.count, by: 4).map { px[$0] }
+        // The middle of the shape is fully shadowed; its edge soft.
+        #expect(alphas.max() ?? 0 > 200, "sprite \(sprite.width)×\(sprite.height) is empty")
+    }
+}
 #endif
