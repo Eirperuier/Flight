@@ -147,7 +147,7 @@ public final class ImagePreviewController {
     /// Counts the swipes tracked by the system, so a stopped one knows it was.
     private var swipe = 0
     private var isSwiping = false
-    private var ticker: FrameTicker?
+    private var ticker: FlightClock?
 
     private var gesture: Gesture = .none
     private var drag: DismissDrag?
@@ -278,7 +278,7 @@ public final class ImagePreviewController {
 
     private func build(in view: NSView) {
         guard ticker == nil, let overlay = view as? OverlayView else { return }
-        ticker = FrameTicker(view: overlay) { [weak self] dt in self?.tick(dt) }
+        ticker = FlightClock(view: overlay) { [weak self] dt in self?.tick(dt) }
         backdrop.wantsLayer = true
         backdrop.layer?.backgroundColor = configuration.backgroundColor
         backdrop.alphaValue = 0

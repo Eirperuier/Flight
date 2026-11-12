@@ -1,9 +1,14 @@
 import Foundation
 import QuartzCore
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+#endif
 
 /// A spring, described the way SwiftUI describes one: how long it takes to respond and how
 /// much it bounces (0 settles without overshooting).
-public struct PreviewSpring: Sendable, Hashable {
+public struct FlightSpring: Sendable, Hashable {
     public var response: Double
     public var dampingRatio: Double
 
@@ -13,24 +18,24 @@ public struct PreviewSpring: Sendable, Hashable {
     }
 
     /// Opening and closing: quick, no overshoot.
-    public static let transition = PreviewSpring(response: 0.36, dampingRatio: 1)
+    public static let transition = FlightSpring(response: 0.36, dampingRatio: 1)
     /// Going back after a drag that did not close: quick, a hint of bounce.
-    public static let restore = PreviewSpring(response: 0.32, dampingRatio: 0.86)
+    public static let restore = FlightSpring(response: 0.32, dampingRatio: 0.86)
 
-    var stiffness: Double { pow(2 * .pi / max(response, 0.01), 2) }
-    var damping: Double { 4 * .pi * dampingRatio / max(response, 0.01) }
+    public var stiffness: Double { pow(2 * .pi / max(response, 0.01), 2) }
+    public var damping: Double { 4 * .pi * dampingRatio / max(response, 0.01) }
 }
 
 /// Springs a vector of values toward targets, one frame at a time. Retargeting keeps each
 /// value's current velocity, so an animation can change course mid-flight without a jolt.
-struct SpringVector {
-    private(set) var values: [Double]
-    private(set) var velocities: [Double]
-    private(set) var targets: [Double]
-    var spring: PreviewSpring
-    let tolerances: [Double]
+public struct SpringVector: Sendable {
+    public private(set) var values: [Double]
+    public private(set) var velocities: [Double]
+    public private(set) var targets: [Double]
+    public var spring: FlightSpring
+    public let tolerances: [Double]
 
-    init(values: [Double], tolerances: [Double], spring: PreviewSpring) {
+    public init(values: [Double], tolerances: [Double], spring: FlightSpring) {
         self.values = values
         self.velocities = Array(repeating: 0, count: values.count)
         self.targets = values
@@ -38,26 +43,26 @@ struct SpringVector {
         self.spring = spring
     }
 
-    mutating func set(values: [Double], velocities: [Double]? = nil) {
+    public mutating func set(values: [Double], velocities: [Double]? = nil) {
         self.values = values
         self.velocities = velocities ?? Array(repeating: 0, count: values.count)
     }
 
     /// Moves the targets by `delta`, and the values by `carried` of it: a value carried
     /// all the way moves rigidly with its target, keeping its distance and velocity.
-    mutating func shift(_ delta: [Double], carried: Double) {
+    public mutating func shift(_ delta: [Double], carried: Double) {
         for i in values.indices {
             targets[i] += delta[i]
             values[i] += delta[i] * carried
         }
     }
 
-    mutating func retarget(_ targets: [Double], spring: PreviewSpring? = nil) {
+    public mutating func retarget(_ targets: [Double], spring: FlightSpring? = nil) {
         self.targets = targets
         if let spring { self.spring = spring }
     }
 
-    var isSettled: Bool {
+    public var isSettled: Bool {
         for i in values.indices {
             let tol = tolerances[i]
             if abs(values[i] - targets[i]) > tol || abs(velocities[i]) > tol * 20 { return false }
@@ -66,7 +71,7 @@ struct SpringVector {
     }
 
     /// Advances by `dt` seconds; returns whether the values have come to rest (and snaps them to the targets if so).
-    mutating func step(_ dt: Double) -> Bool {
+    public mutating func step(_ dt: Double) -> Bool {
         let k = spring.stiffness, c = spring.damping
         // Semi-implicit Euler in small fixed steps: stable for stiff springs at any frame rate.
         var remaining = min(dt, 1.0 / 20)
@@ -96,30 +101,30 @@ struct SpringVector {
 /// for this frame, so an image placed relative to content on screen is placed where the
 /// content is now, not where it was a frame ago (which reads as the image drifting).
 @MainActor
-final class FrameTicker: NSObject {
+public final class FlightClock: NSObject {
     private let tick: (Double) -> Void
     private var lastTimestamp: CFTimeInterval?
     private var pending: Double?
     private var link: CADisplayLink?
     private var observer: CFRunLoopObserver?
     #if !canImport(UIKit)
-    private weak var view: PreviewPlatformView?
+    private weak var view: NSView?
     #endif
 
     #if canImport(UIKit)
-    init(tick: @escaping (Double) -> Void) {
+    public init(tick: @escaping (Double) -> Void) {
         self.tick = tick
     }
     #else
-    init(view: PreviewPlatformView, tick: @escaping (Double) -> Void) {
+    public init(view: NSView, tick: @escaping (Double) -> Void) {
         self.view = view
         self.tick = tick
     }
     #endif
 
-    var isRunning: Bool { link != nil }
+    public var isRunning: Bool { link != nil }
 
-    func start() {
+    public func start() {
         guard link == nil else { return }
         lastTimestamp = nil
         pending = nil
@@ -141,7 +146,7 @@ final class FrameTicker: NSObject {
         self.observer = observer
     }
 
-    func stop() {
+    public func stop() {
         link?.invalidate()
         link = nil
         if let observer {
@@ -168,7 +173,7 @@ final class FrameTicker: NSObject {
 
 /// Keeps the display link from retaining the ticker.
 private final class WeakTarget: NSObject {
-    weak var ticker: FrameTicker?
-    init(_ ticker: FrameTicker) { self.ticker = ticker }
+    weak var ticker: FlightClock?
+    init(_ ticker: FlightClock) { self.ticker = ticker }
     @MainActor @objc func fire(_ link: CADisplayLink) { ticker?.fire(link) }
 }

@@ -1,13 +1,13 @@
 #if canImport(UIKit)
 import UIKit
 
-/// The shadow of the image as it flies: the one a thing at its height casts under a light from
+/// The shadow of a picture as it flies: the one a thing at its height casts under a light from
 /// above. The higher, the further down it falls, the softer and the fainter: a tight contact
 /// shadow under it (strong low, gone high) and a wide soft one from the light. Its colour is the
 /// image's own, darkened, as light through a coloured thing leaves; in the dark, near black (a
 /// colour over black would be a glow), so it shows only where it falls on something lit.
 ///
-/// Its height comes from its size: a thumbnail lying on its page (`PreviewSource.elevation`, 4
+/// Its height comes from its size: a thumbnail lying on its page (its `rest`, 4
 /// for a picture lying on others) up to `high` full screen; it is seen as much as the page is,
 /// fading over the backdrop.
 ///
@@ -15,20 +15,20 @@ import UIKit
 /// rounded rects of the thumbnail's shape (a sharp and a soft blur), and every frame only moves,
 /// scales and fades them; the blur in between is the two cross-faded.
 @MainActor
-final class PreviewShadow {
+public final class ElevationShadow {
     /// The two blurs drawn, in the shape's own points.
-    static let sharp: CGFloat = 16, soft: CGFloat = 72
+    public static let sharp: CGFloat = 16, soft: CGFloat = 72
     /// Its height full screen, in points.
-    static let high: CGFloat = 44
+    public static let high: CGFloat = 44
 
     /// One of its two parts at height `e`: blur and drop in points, and opacity.
-    struct Part { var blur: CGFloat; var alpha: CGFloat; var drop: CGFloat }
-    static func contact(_ e: CGFloat) -> Part { Part(blur: 16 + 0.5 * e, alpha: 0.07 * exp(-e / 14), drop: 3 + 0.2 * e) }
-    static func key(_ e: CGFloat) -> Part { Part(blur: 36 + 2.2 * e, alpha: 0.16 / (1 + e / 80), drop: 8 + 0.9 * e) }
+    public struct Part { public var blur: CGFloat; public var alpha: CGFloat; public var drop: CGFloat }
+    public static func contact(_ e: CGFloat) -> Part { Part(blur: 16 + 0.5 * e, alpha: 0.07 * exp(-e / 14), drop: 3 + 0.2 * e) }
+    public static func key(_ e: CGFloat) -> Part { Part(blur: 36 + 2.2 * e, alpha: 0.16 / (1 + e / 80), drop: 8 + 0.9 * e) }
 
     /// The shadow's colour for an image whose mean colour is `mean`: darkened and a little more
     /// saturated; near black in the dark, and stronger there (it shows only on what is lit).
-    static func color(mean: (r: CGFloat, g: CGFloat, b: CGFloat), dark: Bool) -> (color: CGColor, strength: CGFloat) {
+    public static func color(mean: (r: CGFloat, g: CGFloat, b: CGFloat), dark: Bool) -> (color: CGColor, strength: CGFloat) {
         let grey = (mean.r + mean.g + mean.b) / 3, k: CGFloat = dark ? 0.1 : 0.6
         let c = [mean.r, mean.g, mean.b].map { min(max((grey + ($0 - grey) * 1.5) * k, 0), 1) }
         return (CGColor(srgbRed: c[0], green: c[1], blue: c[2], alpha: 1), dark ? 1.8 : 1)
@@ -37,7 +37,7 @@ final class PreviewShadow {
     private static var means: [ObjectIdentifier: (r: CGFloat, g: CGFloat, b: CGFloat)] = [:]
 
     /// The mean colour of `image`: a small copy of it drawn into one pixel, kept for the image.
-    static func mean(of image: UIImage?) -> (r: CGFloat, g: CGFloat, b: CGFloat) {
+    public static func mean(of image: UIImage?) -> (r: CGFloat, g: CGFloat, b: CGFloat) {
         guard let image else { return (0.5, 0.5, 0.5) }
         if let kept = means[ObjectIdentifier(image)] { return kept }
         let small = image.preparingThumbnail(of: CGSize(width: 16, height: 16)) ?? image
@@ -65,21 +65,21 @@ final class PreviewShadow {
     private struct Sprite { let image: CGImage; let size: CGSize }
 
     /// The shape it was drawn for, its height at rest (nil: flat), and its size at rest and full screen.
-    let shape: CGSize
-    let rest: CGFloat?
-    let restDiagonal: CGFloat
-    let fullDiagonal: CGFloat
+    public let shape: CGSize
+    public let rest: CGFloat?
+    public let restDiagonal: CGFloat
+    public let fullDiagonal: CGFloat
     private let strength: CGFloat
     private let sprites: [Sprite]
     /// Contact sharp, contact soft, key sharp, key soft.
-    let layers: [CALayer]
+    public let layers: [CALayer]
 
     /// - Parameters:
     ///   - shape: the thumbnail's size (the shadow's shape, scaled with the image as it grows).
     ///   - corner: its corner radius.
     ///   - rest: its height on the page, or nil if it lies flat (the shadow comes as it rises).
     ///   - full: the image's size full screen.
-    init(image: UIImage?, shape: CGSize, corner: CGFloat, rest: CGFloat?, full: CGSize, dark: Bool) {
+    public init(image: UIImage?, shape: CGSize, corner: CGFloat, rest: CGFloat?, full: CGSize, dark: Bool) {
         self.shape = shape
         self.rest = rest
         restDiagonal = hypot(shape.width, shape.height)
@@ -121,7 +121,7 @@ final class PreviewShadow {
     }
 
     /// Lays the shadow under a clip of `size` centred at `center`, turned by `turn`, `seen` of it.
-    func apply(center: CGPoint, size: CGSize, turn: CGFloat, seen: CGFloat) {
+    public func apply(center: CGPoint, size: CGSize, turn: CGFloat, seen: CGFloat) {
         let lift = min(max((hypot(size.width, size.height) - restDiagonal) / max(fullDiagonal - restDiagonal, 1e-3), 0), 1)
         let base = rest ?? 0
         let e = base + (Self.high - base) * lift

@@ -147,7 +147,7 @@ public final class ImagePreviewController {
     private var layers: PreviewLayers?
     private var springs: SpringVector?
     private var springDone: (() -> Void)?
-    private lazy var ticker = FrameTicker { [weak self] dt in self?.tick(dt) }
+    private lazy var ticker = FlightClock { [weak self] dt in self?.tick(dt) }
 
     private var drag: DismissDrag?
     private var dragAxis: DismissDrag.Axis = .vertical
@@ -342,7 +342,7 @@ public final class ImagePreviewController {
     private func castShadow(from source: PreviewSource?) {
         guard let source, let state = sourceState(source), state.clip.width > 1, state.clip.height > 1 else { return hero.shadow = nil }
         let dark = (source.view?.traitCollection.userInterfaceStyle ?? .light) == .dark
-        hero.shadow = PreviewShadow(image: hero.imageView.image, shape: state.clip.size, corner: source.cornerRadius,
+        hero.shadow = ElevationShadow(image: hero.imageView.image, shape: state.clip.size, corner: source.cornerRadius,
                                     rest: source.elevation, full: fittedFrame.size, dark: dark)
     }
 
@@ -434,15 +434,15 @@ public final class ImagePreviewController {
         hero.isHidden = false
     }
 
-    /// Over the page while the image flies home, taking only the touches on the image: wherever
-    /// the image is put among the page's views, a touch on it would go to what holds it, if that
-    /// even reaches it (it lies outside that view's bounds).
-    private lazy var catcher: PreviewTapCatcher = {
-        let catcher = PreviewTapCatcher()
-        catcher.contains = { [weak self] point, event in
-            guard let self, self.phase == .closing, !self.hero.isHidden, let window = self.catcher.window else { return false }
+    /// Taps on the image as it flies home (to open it again), caught at the window: wherever the
+    /// image is put among the page's views, a touch on it would go to what holds it, if that even
+    /// reaches it. Every other touch, and a pan or scroll begun on the image, goes to the page.
+    private lazy var catcher: FlightTapRecognizer = {
+        let catcher = FlightTapRecognizer()
+        catcher.contains = { [weak self] point in
+            guard let self, self.phase == .closing, !self.hero.isHidden, let window = self.root?.window else { return false }
             let clip = self.hero.clipView
-            return clip.point(inside: window.convert(point, to: clip), with: event)
+            return clip.point(inside: window.convert(point, to: clip), with: nil)
         }
         catcher.onTap = { [weak self] in self?.reopen() }
         return catcher
@@ -450,10 +450,7 @@ public final class ImagePreviewController {
 
     private func catchTaps() {
         guard let window = root?.window else { return }
-        if catcher.superview !== window || window.subviews.last !== catcher {
-            window.addSubview(catcher)
-        }
-        catcher.frame = window.bounds
+        catcher.watch(window)
     }
 
     private func hideHero() {
@@ -789,7 +786,7 @@ public final class ImagePreviewController {
         hero.apply(state)
         backdrop.alpha = state.backdrop
         layers?.host(hero, level: flight.level)
-        if flight.kind == .closing { catchTaps() } else { catcher.removeFromSuperview() }
+        if flight.kind == .closing { catchTaps() } else { catcher.stopWatching() }
         if flight.kind == .closing { followAppStatusBarIfShowing() }
         if flight.isDone {
             let done = flightDone
@@ -883,7 +880,7 @@ public final class ImagePreviewController {
         flightDone = nil
         flightStart = nil
         layers = nil
-        catcher.removeFromSuperview()
+        catcher.stopWatching()
         hero.turn = 0
         if let root, hero.superview !== root {
             hero.layer.zPosition = 0
@@ -1142,7 +1139,7 @@ private final class HeroView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     /// Never in the way of a touch: it lies over the whole page (a tap on the image flying home
-    /// is caught over the page, `PreviewTapCatcher`).
+    /// is caught at the window, `FlightTapRecognizer`).
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { false }
 
     private var liveView: UIView?
@@ -1161,7 +1158,7 @@ private final class HeroView: UIView {
     var turn: CGFloat = 0
 
     /// Its shadow, by its height (its size), as much as the page shows.
-    var shadow: PreviewShadow? {
+    var shadow: ElevationShadow? {
         didSet {
             oldValue?.layers.forEach { $0.removeFromSuperlayer() }
             shadow?.layers.forEach { shade.layer.addSublayer($0) }
@@ -1179,28 +1176,6 @@ private final class HeroView: UIView {
         shade.frame = bounds
         shadow?.apply(center: CGPoint(x: state.clip.midX, y: state.clip.midY), size: state.clip.size, turn: turn,
                       seen: (1 - state.backdrop) * state.opacity)
-    }
-}
-
-/// Takes only the touches `contains` says are its own (on the image flying home), and lets every
-/// other one through to the page under it.
-private final class PreviewTapCatcher: UIView {
-    var contains: (CGPoint, UIEvent?) -> Bool = { _, _ in false }
-    var onTap: (() -> Void)?
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .clear
-        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    @objc private func tapped() { onTap?() }
-
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        contains(convert(point, to: window), event)
     }
 }
 

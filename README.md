@@ -54,8 +54,10 @@ That's it. The sections below cover the rest: buttons on the bars, UIKit and App
 Swift Package Manager:
 
 ```swift
-.package(url: "https://github.com/Eirperuier/ImagePreview.git", from: "0.6.1")
+.package(url: "https://github.com/Eirperuier/Flight.git", from: "0.7.0")
 ```
+
+and add the `ImagePreview` product to your target. (The package was called ImagePreview up to 0.6; it is now Flight, with ImagePreview one of its two products.)
 
 Requires iOS 17, Mac Catalyst 17, macOS 14 or visionOS 1.
 
@@ -231,3 +233,12 @@ With Reduce Motion on, the viewer fades in and out in place instead of flying.
 ## License
 
 MIT
+
+## Flight
+
+The package's other product, `Flight`, is what the viewer flies with, for things of your own flying between two places on screen:
+
+- `FlightGroup` and `FlightPiece`: several things flying at once, each on a spring to a target asked for every frame, so a target on content that scrolls is followed while it moves and landed on exactly. `retarget` turns a flight back mid-way, keeping each piece's speed. A piece never takes a touch, so what lies under it scrolls and taps as usual.
+- `FlightTapRecognizer`: catches a tap on something flying without taking anything else's touches; a pan or scroll that starts on it goes to the page under it.
+- `FlightSpring`, `SpringVector` and `FlightClock`: the springs and the frame clock underneath, which runs just before each frame's layout, so things placed relative to scrolling content don't lag a frame behind.
+- `ElevationShadow`: the shadow a flying picture casts, by how high it is.
