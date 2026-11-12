@@ -54,7 +54,7 @@ That's it. The sections below cover the rest: buttons on the bars, UIKit and App
 Swift Package Manager:
 
 ```swift
-.package(url: "https://github.com/Eirperuier/ImagePreview.git", from: "0.4.0")
+.package(url: "https://github.com/Eirperuier/ImagePreview.git", from: "0.4.1")
 ```
 
 Requires iOS 17, Mac Catalyst 17, macOS 14 or visionOS 1.
@@ -139,6 +139,15 @@ preview.present(from: view)
 ```
 
 The source closure is asked again when the viewer closes, so after scrolling the collection view to the image on screen, the image lands in the right cell. If there is no thumbnail on screen, the image fades out where it is.
+
+If your app draws something over the page that can cover a thumbnail (a header, a composer), give the source its `visibleArea`, in the window's coordinates. On iOS the image then comes out from under what covers the thumbnail as it opens and goes back under it as it closes, rather than flying over it:
+
+```swift
+var source = PreviewSource(view: cell.imageView, cornerRadius: 8)
+source.visibleArea = { [weak self] in self?.areaBetweenHeaderAndComposer() }
+```
+
+On the Mac (Catalyst), a two-finger swipe up or down on the trackpad closes the viewer, following the fingers like a drag.
 
 On iOS, put buttons on the bars through `preview.page.navigationItem` and `preview.page.toolbarItems`; on macOS, set `preview.title` and `preview.actionsView`. On both, `setPage(actions:_:)` builds the page in SwiftUI before presenting.
 
