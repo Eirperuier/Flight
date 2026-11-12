@@ -15,21 +15,28 @@ public struct PreviewSource {
     public var cornerRadius: CGFloat
     /// How the thumbnail draws its image, so the first and last frames match it exactly.
     public var contentMode: PreviewContentMode
+    /// How high the thumbnail lies over its page, if it casts a shadow there (in points: 4 is a
+    /// picture lying on others). The image rises from it, its shadow with it; nil: it lies flat,
+    /// and the shadow comes as the image rises.
+    public var elevation: CGFloat?
     let setHidden: (Bool) -> Void
 
     /// - Parameters:
     ///   - view: The view showing the thumbnail. It is hidden while the viewer shows its image.
     ///   - cornerRadius: The thumbnail's corner radius.
     ///   - contentMode: How the thumbnail draws its image.
-    public init(view: PreviewPlatformView, cornerRadius: CGFloat = 0, contentMode: PreviewContentMode = .fill) {
+    ///   - elevation: How high the thumbnail lies over its page, if it casts a shadow there.
+    public init(view: PreviewPlatformView, cornerRadius: CGFloat = 0, contentMode: PreviewContentMode = .fill, elevation: CGFloat? = nil) {
         self.view = view
         self.cornerRadius = cornerRadius
         self.contentMode = contentMode
+        self.elevation = elevation
         self.setHidden = { [weak view] hidden in view?.isHidden = hidden }
     }
 
-    init(view: PreviewPlatformView, cornerRadius: CGFloat, contentMode: PreviewContentMode, setHidden: @escaping (Bool) -> Void) {
+    init(view: PreviewPlatformView, cornerRadius: CGFloat, contentMode: PreviewContentMode, elevation: CGFloat? = nil, setHidden: @escaping (Bool) -> Void) {
         self.view = view
+        self.elevation = elevation
         self.cornerRadius = cornerRadius
         self.contentMode = contentMode
         self.setHidden = setHidden

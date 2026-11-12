@@ -336,6 +336,14 @@ public final class ImagePreviewController {
         hiddenSource = source
     }
 
+    /// The image's shadow as it flies, rising from the thumbnail's (none if the thumbnail isn't on screen).
+    private func castShadow(from source: PreviewSource?) {
+        guard let source, let state = sourceState(source), state.clip.width > 1, state.clip.height > 1 else { return hero.shadow = nil }
+        let dark = (source.view?.traitCollection.userInterfaceStyle ?? .light) == .dark
+        hero.shadow = PreviewShadow(image: hero.imageView.image, shape: state.clip.size, corner: source.cornerRadius,
+                                    rest: source.elevation, full: fittedFrame.size, dark: dark)
+    }
+
     /// The thumbnail's frame in the viewer, if it is on screen.
     private func visibleFrame(of source: PreviewSource?) -> CGRect? {
         guard let frame = frame(of: source), let root, frame.intersects(root.bounds) else { return nil }
@@ -387,6 +395,7 @@ public final class ImagePreviewController {
         hideSource()
 
         let fitted = fittedFrame
+        castShadow(from: source)
         // The navigation controller shows its bars as it appears; they come in with the image instead.
         navigation?.bars.forEach { $0.alpha = 0 }
         setAccessories(visible: true, delay: 0.06)
@@ -424,6 +433,7 @@ public final class ImagePreviewController {
 
     private func hideHero() {
         endFlight()
+        hero.shadow = nil
         hero.isHidden = true
         hero.setLiveView(nil)
     }
@@ -433,6 +443,7 @@ public final class ImagePreviewController {
         guard let root, let page = currentPage else { return }
         let image = page.imageView.convert(page.imageView.bounds, to: root)
         showHero(currentImage(index) ?? page.image)
+        castShadow(from: sourceProvider(index))
         setHero(HeroState(image: image, clip: image.intersection(root.bounds), cornerRadius: 0, backdrop: 1))
         pager.isHidden = true
     }
@@ -997,6 +1008,8 @@ private final class PreviewPagerView: UIScrollView {
 private final class HeroView: UIView {
     let clipView = UIView()
     let imageView = UIImageView()
+    /// Its shadow's layers, under the clip.
+    private let shade = UIView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1005,6 +1018,8 @@ private final class HeroView: UIView {
         imageView.contentMode = .scaleToFill
         imageView.accessibilityIgnoresInvertColors = true
         clipView.addSubview(imageView)
+        shade.isUserInteractionEnabled = false
+        addSubview(shade)
         addSubview(clipView)
         isHidden = true
     }
@@ -1027,6 +1042,14 @@ private final class HeroView: UIView {
     /// How it's turned (a thumbnail lying at an angle), about the clip's centre.
     var turn: CGFloat = 0
 
+    /// Its shadow, by its height (its size), as much as the page shows.
+    var shadow: PreviewShadow? {
+        didSet {
+            oldValue?.layers.forEach { $0.removeFromSuperlayer() }
+            shadow?.layers.forEach { shade.layer.addSublayer($0) }
+        }
+    }
+
     func apply(_ state: HeroState) {
         clipView.transform = .identity
         clipView.bounds = CGRect(origin: .zero, size: state.clip.size)
@@ -1035,6 +1058,9 @@ private final class HeroView: UIView {
         clipView.layer.cornerRadius = min(state.cornerRadius, min(state.clip.width, state.clip.height) / 2)
         imageView.frame = state.image.offsetBy(dx: -state.clip.minX, dy: -state.clip.minY)
         clipView.alpha = state.opacity
+        shade.frame = bounds
+        shadow?.apply(center: CGPoint(x: state.clip.midX, y: state.clip.midY), size: state.clip.size, turn: turn,
+                      seen: (1 - state.backdrop) * state.opacity)
     }
 }
 

@@ -111,10 +111,17 @@ struct FlightWorld {
 struct PreviewFlight {
     enum Kind { case opening, closing }
 
-    /// The spring's ω: opening (place and size together), and closing (place; size a bit quicker).
-    static let openOmega = 20.0, homeOmega = 14.0, homeSizeOmega = 22.0
-    /// The goal eases in from rest over `emerge`, and from one aim to the next over `lift`.
-    static let emerge = 0.24, lift = 0.18
+    /// Opening: one spring for place and size, ω `openOmega`; stiffer (`escapeOmega`) while it
+    /// comes out from under the layers, easing back over `lift` once over them all, so it
+    /// starts briskly and no force jumps.
+    static let openOmega = 20.0, escapeOmega = 30.0
+    /// Closing: home is a pull of its own, the same however it's let go (a little under critical,
+    /// so a throw carries on as a throw does); the finger only gives it its velocity. The size
+    /// goes home on a quicker spring of its own, small by the time it gets anywhere.
+    static let homeOmega = 13.0, homeZeta = 0.8, homeSizeOmega = 26.0
+    /// The goal eases in from rest over `emerge` (barely: it starts at once), and from one aim to
+    /// the next over `lift`.
+    static let emerge = 0.05, lift = 0.25
     static let step = 1.0 / 240
 
     let kind: Kind
@@ -133,8 +140,13 @@ struct PreviewFlight {
     private(set) var landedUncleared = false
     /// How much it moves with the page now: as much as its goal does.
     private var attach: Double = 1
-    /// Opening: its progress when it got over everything (the backdrop starts from there).
+    /// Opening: its progress, and the time, when it got over everything (the backdrop starts from there).
     private var overAt: Double?
+    private var overClock: Double?
+    /// Closing: when its size's goal started easing in (earlier when planned again on the way).
+    private var sizeStart: Double = 0
+    /// Closing: how long it has been waiting, still, under a layer it can't get clear of.
+    private var stuck: Double = 0
     /// Closing: the clip's size and the backdrop as it was let go.
     private let releaseSize: CGSize
     private let releaseBackdrop: CGFloat
@@ -197,7 +209,7 @@ struct PreviewFlight {
             guard let overAt else { return 0 }
             return CGFloat(min(max((progress - overAt) / max(1 - overAt, 1e-3), 0), 1))
         case .closing:
-            return releaseBackdrop * CGFloat(1 - Self.ease(progress / 0.85))
+            return releaseBackdrop * CGFloat(1 - Self.ease(progress / 0.7))
         }
     }
 
@@ -242,17 +254,19 @@ struct PreviewFlight {
         attach = target.w
         switch kind {
         case .opening:
-            let w = Self.openOmega
+            let eased = overClock.map { Self.ease((clock - $0) / Self.lift) } ?? 0
+            let w = plan.stages.isEmpty ? Self.openOmega : Self.escapeOmega + (Self.openOmega - Self.escapeOmega) * eased
             velocity.dx += (w * w * (target.point.x - center.x) - 2 * w * velocity.dx) * h
             velocity.dy += (w * w * (target.point.y - center.y) - 2 * w * velocity.dy) * h
             progressVelocity += (w * w * (target.g - progress) - 2 * w * progressVelocity) * h
         case .closing:
-            let w = Self.homeOmega, s = Self.homeSizeOmega
-            velocity.dx += (w * w * (target.point.x - center.x) - 2 * w * velocity.dx) * h
-            velocity.dy += (w * w * (target.point.y - center.y) - 2 * w * velocity.dy) * h
-            // Its size goes home from the moment it's let go, the goal eased in.
-            let u = Self.ease(clock / Self.lift), up = Self.ease((clock - h) / Self.lift)
-            progressVelocity += (s * s * (u - progress) + 2 * s * ((u - up) / h - progressVelocity)) * h
+            let w = Self.homeOmega, z = Self.homeZeta, s = Self.homeSizeOmega
+            velocity.dx += (w * w * (target.point.x - center.x) - 2 * z * w * velocity.dx) * h
+            velocity.dy += (w * w * (target.point.y - center.y) - 2 * z * w * velocity.dy) * h
+            // Its size goes home from the moment it's let go, the goal eased in; damped against
+            // rest, not the eased goal's own speed: the ease only softens the start.
+            let u = Self.ease((clock - sizeStart) / Self.lift)
+            progressVelocity += (s * s * (u - progress) - 2 * s * progressVelocity) * h
         }
         center.x += velocity.dx * h
         center.y += velocity.dy * h
@@ -261,9 +275,24 @@ struct PreviewFlight {
         let half = hypot(q.size.width, q.size.height) / 2
         seenSpeed = hypot(velocity.dx, velocity.dy) + (lastSeen.map { abs(half - $0.half) / h } ?? 0)
         lastSeen = (half, seenSpeed)
+        if kind == .closing { attach = progress }
         changeLayers(world, q)
         bend(world)
+        if replanIfStuck(world, h) { return }
         finishIfThere(world)
+    }
+
+    /// Closing: waiting, still, under a layer it can't get clear of where its goal is (the page
+    /// moved it somewhere its way out no longer works): planned afresh from where it is, as it's
+    /// moving, its size and layer as they are.
+    private mutating func replanIfStuck(_ world: FlightWorld, _ h: Double) -> Bool {
+        guard kind == .closing, !rehearsing else { return false }
+        stuck = level > 0 && backdrop < 0.02 && hypot(velocity.dx, velocity.dy) < 8 ? stuck + h : 0
+        guard stuck > 0.15 else { return false }
+        stuck = 0
+        sizeStart = min(sizeStart, clock - Self.lift)
+        choosePlan(world, pageVelocity: pageVelocity())
+        return true
     }
 
     private mutating func changeLayers(_ world: FlightWorld, _ q: TurnedRect) {
@@ -272,7 +301,7 @@ struct PreviewFlight {
         case .opening:
             // Over each layer in turn, lowest first, as soon as none of it lies on the image.
             while level < layerCount, world.clear(q, of: level) { level += 1 }
-            if level >= layerCount, overAt == nil { overAt = progress }
+            if level >= layerCount, overAt == nil { overAt = progress; overClock = clock }
         case .closing:
             // Under each layer, highest first, the moment none of it lies on the image, once the dark is gone.
             guard backdrop < 0.02 else { return }
@@ -422,7 +451,7 @@ struct PreviewFlight {
 
     private struct Rehearsal { var ok: Bool; var time: Double; var dip: Double; var fired: [Double?] }
 
-    private func rehearse(_ world: FlightWorld, pageVelocity v: CGVector, limit: Double = 2, until: (PreviewFlight) -> Bool) -> Rehearsal {
+    private func rehearse(_ world: FlightWorld, pageVelocity v: CGVector, limit: Double = 3, until: (PreviewFlight) -> Bool) -> Rehearsal {
         var copy = self
         copy.rehearsing = true
         var speeds: [Double] = []
@@ -504,7 +533,7 @@ struct PreviewFlight {
     }
 
     /// Tries each way out and picks one; for each, the time to bend toward each next aim is the
-    /// earliest that still gets its layers done (bisection on rehearsals), a quarter back toward safe.
+    /// earliest that still gets its layers done (bisection on rehearsals), a tenth back toward safe.
     private mutating func choosePlan(_ world: FlightWorld, pageVelocity v: CGVector) {
         if kind == .opening {
             changeLayers(world, clip(world))
@@ -516,7 +545,13 @@ struct PreviewFlight {
         let all = Array(world.covers.indices)
         let ahead = CGPoint(x: center.x + velocity.dx / Self.homeOmega, y: center.y + velocity.dy / Self.homeOmega)
         let want: (CGPoint) -> CGPoint = kind == .opening ? { _ in CGPoint(x: world.fitted.midX, y: world.fitted.midY) } : { _ in ahead }
-        let done: (PreviewFlight) -> Bool = { $0.isDone && !$0.landedUncleared }
+        // Closing: rehearsed as far as home in all but the last creep.
+        let slot = world.slot.center
+        let done: (PreviewFlight) -> Bool = {
+            ($0.isDone && !$0.landedUncleared)
+                || ($0.kind == .closing && !$0.landedUncleared && $0.level == 0 && $0.plan.next == $0.plan.events.count && $0.progress > 0.99
+                    && hypot($0.center.x - slot.x, $0.center.y - slot.y) < 3)
+        }
         var tried: [String] = []
         var best: (score: Double, stages: [(layers: [Int], dir: CGVector)], margin: Margin, grow: Double, times: [Double])?
         for groups in [[all], all.map { [$0] }] {
@@ -544,7 +579,7 @@ struct PreviewFlight {
                                 ts[j] = mid
                                 if run(ts).ok { hi = mid } else { lo = mid }
                             }
-                            times[j] = hi + 0.25 * (late - hi)
+                            times[j] = hi + 0.1 * (late - hi)
                         }
                         let r = run(times)
                         guard r.ok else { continue }
