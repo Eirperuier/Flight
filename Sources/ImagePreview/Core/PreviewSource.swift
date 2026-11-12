@@ -15,6 +15,11 @@ public struct PreviewSource {
     public var cornerRadius: CGFloat
     /// How the thumbnail draws its image, so the first and last frames match it exactly.
     public var contentMode: PreviewContentMode
+    /// Where the thumbnail can be seen, in its window's coordinates, when something drawn over
+    /// the page covers part of it (a bar, a composer): the image comes out from under that as it
+    /// opens and goes back under it as it closes. Read on each frame of the flight, so it follows
+    /// the page. Nil: all of the window.
+    public var visibleArea: (@MainActor () -> CGRect?)?
     let setHidden: (Bool) -> Void
 
     /// - Parameters:

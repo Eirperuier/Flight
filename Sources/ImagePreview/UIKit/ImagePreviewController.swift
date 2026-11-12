@@ -189,6 +189,11 @@ public final class ImagePreviewController {
         singleTap.require(toFail: doubleTap)
         [dismissPan, singleTap, doubleTap].forEach { $0.delegate = gestureDelegate }
         dismissPan.maximumNumberOfTouches = 1
+        #if targetEnvironment(macCatalyst)
+        // A two-finger swipe on the trackpad closes too, following the fingers, as a drag does
+        // (and as the viewer on the Mac does). The pager takes the sideways ones that page.
+        dismissPan.allowedScrollTypesMask = .continuous
+        #endif
         [dismissPan, singleTap, doubleTap].forEach(view.addGestureRecognizer)
     }
 
@@ -319,6 +324,26 @@ public final class ImagePreviewController {
         if hiddenSource?.view !== source?.view { hiddenSource?.setHidden(false) }
         source?.setHidden(true)
         hiddenSource = source
+    }
+
+    /// The thumbnail's visible area in the viewer, when the app says something covers part of it.
+    private func visibleArea(of source: PreviewSource?) -> CGRect? {
+        guard let view = source?.view, let window = view.window, let root, let area = source?.visibleArea?() else { return nil }
+        return window.convert(area, to: root)
+    }
+
+    /// Cuts the image in flight where the thumbnail's page is covered, as much as the page shows:
+    /// all of it there at the thumbnail, none open, so it comes out from under what covers the
+    /// thumbnail and goes back under it.
+    private func coverHero() {
+        let source = phase == .closing ? closingSource : hiddenSource
+        guard let root, let area = visibleArea(of: source) else { return hero.setCover(nil) }
+        let shown = min(max(heroState.backdrop, 0), 1)
+        let all = root.bounds
+        hero.setCover(CGRect(x: area.minX + (all.minX - area.minX) * shown,
+                             y: area.minY + (all.minY - area.minY) * shown,
+                             width: area.width + (all.width - area.width) * shown,
+                             height: area.height + (all.height - area.height) * shown))
     }
 
     /// The thumbnail's frame in the viewer, if it is on screen.
@@ -605,6 +630,7 @@ public final class ImagePreviewController {
     private func setHero(_ state: HeroState) {
         heroState = state
         hero.apply(state)
+        coverHero()
         backdrop.alpha = state.backdrop
         springs?.set(values: state.vector)
     }
@@ -639,6 +665,7 @@ public final class ImagePreviewController {
         self.springs = springs
         heroState = HeroState(springs.values)
         hero.apply(heroState)
+        coverHero()
         backdrop.alpha = heroState.backdrop
         // Closing: the status bar turns back to the app's as the page shows through.
         if phase == .closing, !statusBarFollowsApp, heroState.backdrop < 0.5 {
@@ -697,7 +724,10 @@ public final class ImagePreviewController {
 
         func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
             guard let controller, let pan = g as? UIPanGestureRecognizer, pan === controller.dismissPan else { return true }
-            return controller.canBeginDrag(velocity: pan.velocity(in: pan.view))
+            // A swipe's first scroll can come with no speed yet: its way so far then.
+            var velocity = pan.velocity(in: pan.view)
+            if velocity == .zero { velocity = pan.translation(in: pan.view) }
+            return controller.canBeginDrag(velocity: velocity)
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) { controller?.pagerDidScroll() }
@@ -889,6 +919,21 @@ private final class HeroView: UIView {
         view.frame = imageView.bounds
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         imageView.addSubview(view)
+    }
+
+    /// Where it shows: under what covers the thumbnail outside `rect`; nil all over.
+    func setCover(_ rect: CGRect?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        guard let rect else { return layer.mask = nil }
+        let cover = layer.mask ?? {
+            let mask = CALayer()
+            mask.backgroundColor = UIColor.black.cgColor
+            layer.mask = mask
+            return mask
+        }()
+        cover.frame = rect
     }
 
     func apply(_ state: HeroState) {
