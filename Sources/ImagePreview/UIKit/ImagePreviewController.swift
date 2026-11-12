@@ -201,7 +201,10 @@ public final class ImagePreviewController {
         #if targetEnvironment(macCatalyst)
         // A two-finger swipe on the trackpad closes too, following the fingers, as a drag does
         // (and as the viewer on the Mac does). The pager takes the sideways ones that page.
+        // Never the pointer's click and drag: an image dragged by the mouse isn't how anything
+        // moves on the Mac.
         dismissPan.allowedScrollTypesMask = .continuous
+        dismissPan.allowedTouchTypes = []
         #endif
         [dismissPan, singleTap, doubleTap].forEach(view.addGestureRecognizer)
     }
