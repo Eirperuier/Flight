@@ -145,7 +145,8 @@ struct PreviewFlight {
     let layerCount: Int
     private(set) var clock: Double = 0
     private(set) var isDone = false
-    /// Closing ended without getting clear of a layer (it shouldn't): it dropped under it anyway.
+    /// Ended without getting clear of a layer (it shouldn't): it dropped under it (closing) or
+    /// went over it (opening) anyway.
     private(set) var landedUncleared = false
     /// How much it moves with the page now: as much as its goal does.
     private var attach: Double = 1
@@ -218,18 +219,21 @@ struct PreviewFlight {
         return out
     }
 
-    /// Till a plan comes (`adoptPlan`): opening, it waits where it is (a frame or two; it was
-    /// planned from there, so it goes on just as planned); closing, straight home with the finger's
-    /// velocity. If none comes, opening goes straight for the middle after a while.
+    /// Till a plan comes (`adoptPlan`): opening, it waits where it is (it was planned from there,
+    /// so it goes on just as planned); closing, straight home with the finger's velocity. An
+    /// opening with nothing over it goes straight for the middle after a while if none comes;
+    /// under a layer it waits for its way out however long that takes, as grown into the layer
+    /// on the way to the middle it could never get over it.
     private mutating func startStraight(_ world: FlightWorld) {
         if kind == .opening { changeLayers(world, clip(world)); changes = [] }
         setPlan(world, stages: [], margin: Self.margins[0], grow: 0, times: nil)
         if kind == .opening {
-            goal = [Leg(aim: .fixed(center, 1, progress), t0: clock, duration: 0), Leg(aim: .centre, t0: clock + Self.planWait, duration: Self.emerge)]
+            goal = [Leg(aim: .fixed(center, 1, progress), t0: clock, duration: 0)]
+            if isOverAll { goal.append(Leg(aim: .centre, t0: clock + Self.planWait, duration: Self.emerge)) }
         }
     }
 
-    /// How long an opening waits for its plan before going without one.
+    /// How long an opening with nothing over it waits for its plan before going without one.
     static let planWait = 0.3
 
     /// This flight as it will be `delay` on, with its plan chosen there: made off the main
@@ -294,6 +298,7 @@ struct PreviewFlight {
     var backdrop: CGFloat {
         switch kind {
         case .opening:
+            if isDone { return 1 }
             guard let overAt else { return 0 }
             return CGFloat(min(max((progress - overAt) / max(1 - overAt, 1e-3), 0), 1))
         case .closing:
@@ -407,6 +412,9 @@ struct PreviewFlight {
         switch kind {
         case .opening:
             if isOverAll, grown, near < 0.3, speed < 4 { isDone = true }
+            // Grew into a layer it never got over (it shouldn't; the page moved a layer onto it):
+            // over it anyway, rather than left under it.
+            else if clock > 1.9, grown, near < 2 { level = layerCount; isDone = true; landedUncleared = true }
         case .closing:
             if level == 0, clock > Self.lift, grown, near < 0.3, speed < 4 { isDone = true }
             // Never got clear (it should): land anyway.

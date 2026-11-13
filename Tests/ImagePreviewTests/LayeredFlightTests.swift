@@ -110,3 +110,19 @@ func aTapOnTheWayHomeOpensItAgain(_ i: Int, _ scroll: Double) {
     _ = fly(&opening, i, scroll: scroll)
     #expect(opening.isDone && opening.isOverAll)
 }
+
+/// Its plan comes late (a slow build, a busy machine): the image waits for it under the layers,
+/// not growing into them on the way to the middle, and then opens over all of them.
+@Test(arguments: [(0, -40.0), (1, 60.0), (2, 380.0)])
+func opensOverEveryLayerWithALatePlan(_ i: Int, _ scroll: Double) {
+    let w = world(i, scroll: scroll)
+    let start = PreviewFlight.opening(w, planned: false)
+    let planned = start.plannedAhead(by: 0.05, world: w)
+    var flight = start
+    for _ in 0..<240 { flight.advance(1.0 / 240, world: w) }
+    #expect(flight.progress < 0.05 && !flight.isOverAll)
+    flight.adoptPlan(of: planned, world: w)
+    var left = flight
+    _ = fly(&left, i, scroll: scroll)
+    #expect(left.isDone && left.isOverAll && !left.landedUncleared)
+}
