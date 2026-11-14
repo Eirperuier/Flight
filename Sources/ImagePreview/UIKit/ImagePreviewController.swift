@@ -72,6 +72,7 @@ public final class ImagePreviewController {
 
     /// Opens the viewer over the view controller `view` is in.
     public func present(from view: UIView) {
+        trace("present")
         guard !isPresented, count > 0, var presenter = view.closestViewController else { return }
         // A viewer still putting its last image home goes now (its image lands at once).
         for other in Self.retained.values where other.phase == .closed || other.phase == .closing { other.landNow() }
@@ -91,6 +92,7 @@ public final class ImagePreviewController {
 
     /// Closes the viewer, into the thumbnail of the image on screen if it is visible.
     public func dismiss() {
+        trace("dismiss")
         switch phase {
         case .opening, .presented, .restoring:
             close(velocity: .zero)
@@ -392,6 +394,7 @@ public final class ImagePreviewController {
     }
 
     private func open() {
+        trace("open")
         let source = sourceProvider(index)
         if currentImage(index) == nil, let snap = snapshot(source) { fallbacks[index] = snap }
         updatePages()
@@ -425,6 +428,7 @@ public final class ImagePreviewController {
     }
 
     private func didSettlePresented() {
+        trace("settled")
         phase = .presented
         currentPage?.setImage(currentImage(index))
         pager.isHidden = false
@@ -477,6 +481,7 @@ public final class ImagePreviewController {
     }
 
     private func close(velocity: CGPoint) {
+        trace("close")
         if phase == .presented { liftHero() }
         phase = .closing
         // From here the app has the touches again: the page can be scrolled while the image flies home.
@@ -531,6 +536,7 @@ public final class ImagePreviewController {
     }
 
     private func didClose() {
+        trace("didClose")
         phase = .closed
         closingSource?.setHidden(false)
         hiddenSource = nil
@@ -542,6 +548,7 @@ public final class ImagePreviewController {
 
     /// The image is home: the page, empty and letting every touch through, is dismissed.
     private func finish() {
+        trace("finish")
         handoff = nil
         hideHero()
         backdrop.alpha = 0
@@ -550,6 +557,7 @@ public final class ImagePreviewController {
     }
 
     private func retire() {
+        trace("retire")
         ticker.stop()
         handoff = nil
         navigation?.presentingViewController?.dismiss(animated: false)
@@ -747,6 +755,7 @@ public final class ImagePreviewController {
     }
 
     private func fly(_ flight: PreviewFlight, completion: @escaping () -> Void) {
+        trace("fly \(flight.kind == .opening ? "opening" : "closing") layers \(flight.layerCount)")
         flightSerial += 1
         pendingPlan = nil
         self.flight = flight
@@ -758,6 +767,11 @@ public final class ImagePreviewController {
     /// The longest an opening flight runs before it goes over everything on the springs.
     static let openingLimit = 2.5
     private static let log = Logger(subsystem: "Flight", category: "ImagePreview")
+
+    /// Each step of a viewer's life, with its phase, to find what leaves an image behind.
+    private func trace(_ step: String) {
+        Self.log.notice("\(ObjectIdentifier(self).hashValue, privacy: .public) \(step, privacy: .public) phase \(String(describing: self.phase), privacy: .public) flight \(self.flight != nil, privacy: .public) presented \(self.navigation?.presentingViewController != nil, privacy: .public)")
+    }
 
     /// The flight given up: on with the springs, over everything.
     private func flyOnBySprings(_ flight: PreviewFlight, source: PreviewSource?) {
@@ -857,6 +871,7 @@ public final class ImagePreviewController {
 
     /// The image flying home tapped: it turns back and opens again from where it is.
     fileprivate func reopen() {
+        trace("reopen")
         guard phase == .closing, let flight, flight.kind == .closing, let source = closingSource, let world = flightWorld(source) else { return }
         let clip = flight.clip(world.world)
         let from = (center: clip.center, size: clip.size, velocity: flight.velocity, level: flight.level)
@@ -880,6 +895,7 @@ public final class ImagePreviewController {
 
     /// Another viewer opens: this one's image, still flying home, lands at once.
     private func landNow() {
+        trace("landNow")
         if phase == .closing {
             flight = nil
             flightDone = nil
@@ -896,6 +912,7 @@ public final class ImagePreviewController {
 
     /// Back on the stage, flat, no flight.
     private func endFlight() {
+        trace("endFlight")
         flight = nil
         flightDone = nil
         flightStart = nil
@@ -925,6 +942,7 @@ public final class ImagePreviewController {
     /// Until it surely has, the landed image stays pinned on it, following it if the page is
     /// scrolling, so the two never part; then the image goes.
     private func handOverOrFinish() {
+        trace("handOverOrFinish")
         guard heroState.opacity > 0, closingSource != nil else { return finish() }
         // The thumbnail shows again under the image, its own shadow with it: the image's would
         // darken it twice for these frames.
