@@ -308,6 +308,13 @@ struct PreviewFlight {
 
     var isOverAll: Bool { level >= layerCount }
 
+    /// What it did, for the log: its plan's stages, its layer changes and how it ended.
+    var summary: String {
+        let stages = plan.stages.map { "\($0.layers)" }.joined(separator: " ")
+        let moves = changes.map { String(format: "%.2f:%d>%d", $0.t, $0.from, $0.to) }.joined(separator: " ")
+        return String(format: "clock %.2f level %d/%d uncleared %@ stages [%@] changes [%@]", clock, level, layerCount, landedUncleared ? "yes" : "no", stages, moves)
+    }
+
     /// How fast it looks to move: its centre, plus how fast its edges grow or shrink.
     private(set) var seenSpeed: Double = 0
 

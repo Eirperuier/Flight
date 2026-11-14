@@ -415,6 +415,7 @@ public final class ImagePreviewController {
             self.layers = layers
             trace("layers \(layers.names)")
             if let world = flightWorld(source), let start = sourceState(source, at: world.slotFrame) {
+                trace("slot \(world.world.slot.center.debugDescription) \(world.world.slot.size.debugDescription) covers " + world.world.covers.map { "\($0.count)" }.joined(separator: ","))
                 setHero(start)
                 hero.turn = world.world.slot.turn
                 fly(.opening(world.world, planned: false)) { [weak self] in self?.didSettlePresented() }
@@ -824,6 +825,7 @@ public final class ImagePreviewController {
         if flight.kind == .closing { catchTaps() } else { catcher.stopWatching() }
         if flight.kind == .closing { followAppStatusBarIfShowing() }
         if flight.isDone {
+            trace("flight done \(flight.summary)")
             let done = flightDone
             self.flight = nil
             flightDone = nil
@@ -859,6 +861,7 @@ public final class ImagePreviewController {
 
     private func adopt(_ planned: PreviewFlight, for serial: Int) {
         guard serial == flightSerial, var flight, !flight.isDone else { return }
+        trace(String(format: "plan at %.2f made for %.2f: ", flight.clock, planned.clock) + planned.summary)
         if flight.clock <= planned.clock {
             pendingPlan = planned
             return
