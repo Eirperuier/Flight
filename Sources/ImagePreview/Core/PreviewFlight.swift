@@ -116,6 +116,13 @@ struct FlightWorld {
     }
 
     func overlapping(_ q: TurnedRect, _ layers: [Int]) -> Bool { layers.contains { !clear(q, of: $0) } }
+
+    /// The whole world as text, for the log (and to build a test from).
+    var dump: String {
+        func r(_ q: TurnedRect) -> String { String(format: "(%.1f,%.1f,%.1f,%.1f,%.3f)", q.center.x, q.center.y, q.size.width, q.size.height, q.turn) }
+        func c(_ q: CGRect) -> String { String(format: "(%.1f,%.1f,%.1f,%.1f)", q.minX, q.minY, q.width, q.height) }
+        return "slot \(r(slot)) fitted \(c(fitted)) bounds \(c(bounds)) paged \(paged) covers [" + covers.map { "[" + $0.map(r).joined(separator: " ") + "]" }.joined(separator: " | ") + "]"
+    }
 }
 
 struct PreviewFlight {

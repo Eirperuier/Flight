@@ -843,6 +843,7 @@ public final class ImagePreviewController {
         guard let flight else { return }
         let serial = flightSerial
         let ahead = max(1.0 / 30, Self.planCost * 1.5 + 1.0 / 60)
+        trace(String(format: "planning %.3f ahead at %.3f in ", ahead, flight.clock) + world.dump)
         Task.detached(priority: .userInitiated) {
             let start = Date()
             let planned = flight.plannedAhead(by: ahead, world: world)
