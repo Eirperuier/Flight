@@ -168,6 +168,8 @@ struct PreviewFlight {
     private let releaseSize: CGSize
     private let releaseBackdrop: CGFloat
     private var lastSlot: CGPoint
+    /// The thumbnail's size and turn as last seen (a press let go grows it back mid-flight).
+    private var lastShape: (size: CGSize, turn: CGFloat)?
     private var pageMoves: [(t: Double, d: CGVector)] = []
     private var plan: Plan
     private var goal: [Leg] = []
@@ -350,6 +352,14 @@ struct PreviewFlight {
             plan.moved += hypot(d.dx, d.dy)
             pageMoves.append((clock, d))
         }
+        // The thumbnail changed shape (a press let go): its way out was found for the old one,
+        // so it counts as moved, and a bend set by time is tried again before it's taken.
+        if let last = lastShape {
+            let grew = abs(world.slot.size.width - last.size.width) + abs(world.slot.size.height - last.size.height)
+                + abs(world.slot.turn - last.turn) * max(world.slot.size.width, world.slot.size.height)
+            plan.moved += grew
+        }
+        lastShape = (world.slot.size, world.slot.turn)
         var left = min(dt, 0.1)
         while left > 1e-9, !isDone {
             let h = min(Self.step, left)
