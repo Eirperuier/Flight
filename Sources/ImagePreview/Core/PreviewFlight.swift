@@ -254,6 +254,14 @@ struct PreviewFlight {
     /// Takes the plan `other` chose (the same flight, planned elsewhere from the same start):
     /// its goal from now on, eased in from the one so far.
     mutating func adoptPlan(of other: PreviewFlight, world: FlightWorld) {
+        if kind == .opening, other.kind == .opening, other.clock <= clock {
+            // An opening waits in place for its plan, so up to now it is the planned flight:
+            // that one, brought on to now, as a plan on time would be.
+            var planned = other
+            while clock - planned.clock > 1e-9, !planned.isDone { planned.advance(min(clock - planned.clock, 0.05), world: world) }
+            self = planned
+            return
+        }
         let from = goalValue(world)
         plan = other.plan
         // Its bend times counted from when it was chosen: from now, as its goal starts now.
