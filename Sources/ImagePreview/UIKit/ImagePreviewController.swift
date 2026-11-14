@@ -808,6 +808,9 @@ public final class ImagePreviewController {
             flight.advance(dt, world: now.world)
         }
         self.flight = flight
+        if flight.kind == .opening, Int(flight.clock * 60) % 6 == 0, flight.clock < 0.6 {
+            trace(String(format: "step %.3f dt %.4f center (%.1f,%.1f) progress %.3f ", flight.clock, dt, flight.center.x, flight.center.y, flight.progress) + flight.summary + " world " + now.world.dump)
+        }
         let clip = flight.clip(now.world), g = CGFloat(flight.progress)
         guard let slotState = sourceState(source, at: now.slotFrame) else { return }
         var state: HeroState
