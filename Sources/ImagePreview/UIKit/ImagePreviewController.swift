@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import UIKit
+import os
 
 /// Shows images full screen, opening out of the thumbnail that was tapped and closing back into it.
 ///
@@ -754,19 +755,33 @@ public final class ImagePreviewController {
         ticker.start()
     }
 
+    /// The longest an opening flight runs before it goes over everything on the springs.
+    static let openingLimit = 2.5
+    private static let log = Logger(subsystem: "Flight", category: "ImagePreview")
+
+    /// The flight given up: on with the springs, over everything.
+    private func flyOnBySprings(_ flight: PreviewFlight, source: PreviewSource?) {
+        let done = flightDone
+        endFlight()
+        if flight.kind == .opening {
+            animateHero(to: .presented(fittedFrame), spring: configuration.transitionSpring) { done?() }
+        } else {
+            animateHero(to: closedTarget(source), spring: configuration.transitionSpring) { done?() }
+        }
+    }
+
     private func stepFlight(_ dt: Double) {
         guard var flight else { return }
         let source = flight.kind == .opening ? hiddenSource : closingSource
         guard let now = flightWorld(source) else {
             // The thumbnail went (its cell was reused): on with the springs, over everything.
-            let done = flightDone
-            endFlight()
-            if flight.kind == .opening {
-                animateHero(to: .presented(fittedFrame), spring: configuration.transitionSpring) { done?() }
-            } else {
-                animateHero(to: closedTarget(source), spring: configuration.transitionSpring) { done?() }
-            }
-            return
+            return flyOnBySprings(flight, source: source)
+        }
+        if flight.kind == .opening, flight.clock > Self.openingLimit {
+            // An opening that never got over its layers (it shouldn't): over everything, on the
+            // springs, rather than left under them.
+            Self.log.error("opening flight over its limit: level \(flight.level)/\(flight.layerCount), progress \(flight.progress), clock \(flight.clock)")
+            return flyOnBySprings(flight, source: source)
         }
         if dt > 0, var planned = pendingPlan, flight.clock + dt >= planned.clock {
             // Where the plan was made for: the planned flight from here on.
