@@ -81,7 +81,7 @@ final class PreviewLayers {
 
     /// The views in `view` that draw something on screen: a colour, contents, a material.
     private static func collectParts(of view: UIView, in window: UIWindow, into parts: inout [UIView]) {
-        guard !view.isHidden, view.alpha > 0.01, !isScrollChrome(view), parts.count <= 24 else { return }
+        guard !view.isHidden, view.alpha > 0.01, !isScrollChrome(view), !isViewer(view), parts.count <= 24 else { return }
         let frame = view.convert(view.bounds, to: window)
         if view.clipsToBounds, !frame.intersects(window.bounds) { return }
         if draws(view) {
@@ -98,6 +98,15 @@ final class PreviewLayers {
         if let color = layer.backgroundColor, color.alpha > 0.05 { return true }
         if layer.borderWidth > 0 || (layer.shadowOpacity > 0 && layer.shadowPath != nil) { return true }
         return view is UILabel || view is UIImageView && (view as? UIImageView)?.image != nil
+    }
+
+    /// Another viewer, still going as this one opens (closed a moment ago, being dismissed):
+    /// none of the page, nothing to fly round.
+    private static func isViewer(_ view: UIView) -> Bool { view.next is PreviewNavigationController }
+
+    /// What the layers are, for the log.
+    var names: String {
+        layers.map { $0.view.map { String(describing: type(of: $0)) } ?? "gone" }.joined(separator: ", ")
     }
 
     /// A scroll view's own bits: its indicators and the soft edge under its bars, which blur what

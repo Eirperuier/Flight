@@ -413,6 +413,7 @@ public final class ImagePreviewController {
         if !UIAccessibility.isReduceMotionEnabled, let view = source?.view, let root {
             let layers = PreviewLayers(thumbnail: view, stage: root)
             self.layers = layers
+            trace("layers \(layers.names)")
             if let world = flightWorld(source), let start = sourceState(source, at: world.slotFrame) {
                 setHero(start)
                 hero.turn = world.world.slot.turn
