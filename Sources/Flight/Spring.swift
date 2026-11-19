@@ -196,13 +196,15 @@ public final class FlightClock: NSObject {
     }
 
     /// An animation that changes nothing and asks for 120 frames a second, for as long as the clock runs, on a point
-    /// of its own in the window's top left corner, under the screen's rounded corner, all but transparent (0.2%).
+    /// of its own in the window's bottom left corner, under the screen's rounded corner, all but transparent (0.2%:
+    /// the screen shows the same to the pixel).
     ///
     /// On an iPhone Air, paging a branch: the clock alone got 60 to 120, and with this 120 every time. Where it goes
     /// matters. On a layer drawing nothing, a page went at 120 for a tenth of a second and then 60: the phone keeps
     /// to an animation only while it draws something. On the window's own layer it held, but had the window drawn
     /// again every frame, glass and all: by its opacity 13 offscreen passes where there was 1 and 2.5 ms more of the
-    /// GPU, by its position 17 and frames taking up to 10 ms to draw.
+    /// GPU, by its position 17 and frames taking up to 10 ms to draw. In the top left corner, under a bar's glass, it
+    /// had the glass blurred again every frame (1 ms more of the GPU); bars go at the top more than the bottom.
     private func pace(_ scene: UIWindowScene) {
         guard Self.paces, let window = scene.keyWindow ?? scene.windows.first else { return }
         let pacer = CALayer()
@@ -215,7 +217,7 @@ public final class FlightClock: NSObject {
         animation.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        pacer.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        pacer.frame = CGRect(x: 0, y: window.bounds.height - 1, width: 1, height: 1)
         pacer.backgroundColor = CGColor(gray: 0, alpha: 0.002)
         window.layer.addSublayer(pacer)
         pacer.add(animation, forKey: "pace")
