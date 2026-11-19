@@ -96,10 +96,17 @@ public struct SpringVector: Sendable {
 
 /// Calls back once per display frame while running, with the time to advance by.
 ///
-/// The display link only says a frame is due; the callback runs at the end of that turn of
-/// the run loop, just before the frame's layout and commit. By then scroll views have moved
-/// for this frame, so an image placed relative to content on screen is placed where the
-/// content is now, not where it was a frame ago (which reads as the image drifting).
+/// The callback runs late in the frame, just before its layout and commit. By then scroll views
+/// have moved for this frame, so an image placed relative to content on screen is placed where
+/// the content is now, not where it was a frame ago (which reads as the image drifting).
+///
+/// On iOS 18 and later it is a UI update link (`UIUpdateLink`), acting in the update's last phase
+/// before the commit. Before that (and on the Mac) a display link says a frame is due and the
+/// callback waits for the end of that turn of the run loop. The display link's rate is only a
+/// wish: changes made after its callback, as these are, went at 80 frames a second on an iPhone
+/// Air asking for 120 (a branch paged), and at 120 only while something else asked for it (an
+/// animation with its own rate, a display link moving things in its callback). The update link
+/// asks for the frames the changes are made in.
 @MainActor
 public final class FlightClock: NSObject {
     private let tick: (Double) -> Void
@@ -107,6 +114,8 @@ public final class FlightClock: NSObject {
     private var pending: Double?
     private var link: CADisplayLink?
     private var observer: CFRunLoopObserver?
+    /// The UI update link, while running (an `UIUpdateLink`, kept untyped for systems before it).
+    private var updateLink: AnyObject?
     #if !canImport(UIKit)
     private weak var view: NSView?
     #endif
@@ -122,17 +131,36 @@ public final class FlightClock: NSObject {
     }
     #endif
 
-    public var isRunning: Bool { link != nil }
+    public var isRunning: Bool { link != nil || updateLink != nil }
 
     public func start() {
-        guard link == nil else { return }
+        guard !isRunning else { return }
         lastTimestamp = nil
         pending = nil
+        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        if #available(iOS 18, tvOS 18, visionOS 2, *), let scene = Self.scene() {
+            let updateLink = UIUpdateLink(windowScene: scene)
+            updateLink.requiresContinuousUpdates = true
+            updateLink.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
+            #if os(visionOS)
+            let frame = 1.0 / 90
+            #else
+            let frame = 1.0 / Double(max(scene.screen.maximumFramesPerSecond, 1))
+            #endif
+            updateLink.addAction(to: .beforeCATransactionCommit) { [weak self] _, info in
+                guard let self else { return }
+                let now = info.modelTime
+                let dt = self.lastTimestamp.map { now - $0 } ?? frame
+                self.lastTimestamp = now
+                self.tick(max(dt, 1.0 / 240))
+            }
+            updateLink.isEnabled = true
+            self.updateLink = updateLink
+            return
+        }
+        #endif
         #if canImport(UIKit)
         let link = CADisplayLink(target: WeakTarget(self), selector: #selector(WeakTarget.fire(_:)))
-        // As high as the display goes, asked as a rate, not a range: given 80 to 120, a phone ran it at the
-        // range's floor (an iPhone Air, a card flying with nothing else asking more: 60 to 80 frames a second
-        // through its fastest quarter second), and at 120 only when something else asked for it.
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
         #else
         guard let view else { return }
@@ -149,7 +177,21 @@ public final class FlightClock: NSObject {
         self.observer = observer
     }
 
+    #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+    /// The scene on screen: the clock has no view of its own, and a person looks at one scene at a time.
+    private static func scene() -> UIWindowScene? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        return scenes.first { $0.activationState == .foregroundActive } ?? scenes.first { $0.activationState == .foregroundInactive }
+    }
+    #endif
+
     public func stop() {
+        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        if #available(iOS 18, tvOS 18, visionOS 2, *), let updateLink = updateLink as? UIUpdateLink {
+            updateLink.isEnabled = false
+        }
+        #endif
+        updateLink = nil
         link?.invalidate()
         link = nil
         if let observer {
