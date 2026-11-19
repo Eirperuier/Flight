@@ -120,9 +120,8 @@ public final class FlightClock: NSObject {
     /// Whether running clocks hold an animation in the window asking for their rate. Off only to see
     /// what they get without it.
     public static var paces = true
-    /// The layer holding this clock's animation, while it runs.
-    private weak var pacedLayer: CALayer?
-    private var paceKey: String { "flight.clock.\(ObjectIdentifier(self).hashValue)" }
+    /// The point holding this clock's animation, while it runs.
+    private var pacer: CALayer?
     #if !canImport(UIKit)
     private weak var view: NSView?
     #endif
@@ -196,22 +195,32 @@ public final class FlightClock: NSObject {
         return scenes.first { $0.activationState == .foregroundActive } ?? scenes.first { $0.activationState == .foregroundInactive }
     }
 
-    /// An animation on the window that changes nothing (its position, moved by nothing) and asks for 120 frames a
-    /// second, for as long as the clock runs. On an iPhone Air it held a branch paging at 120 every time, where the
-    /// clock alone got 60 to 120. It has to be on what moves: on a layer of its own drawing nothing, a page went at
-    /// 120 for a tenth of a second and then 60. And not on the window's opacity: that had the whole window drawn
-    /// offscreen every frame (13 passes where there was 1, 2.5 ms more of the GPU).
+    /// An animation that changes nothing and asks for 120 frames a second, for as long as the clock runs, on a point
+    /// of its own in the window's top left corner, under the screen's rounded corner, all but transparent (0.2%).
+    ///
+    /// On an iPhone Air, paging a branch: the clock alone got 60 to 120, and with this 120 every time. Where it goes
+    /// matters. On a layer drawing nothing, a page went at 120 for a tenth of a second and then 60: the phone keeps
+    /// to an animation only while it draws something. On the window's own layer it held, but had the window drawn
+    /// again every frame, glass and all: by its opacity 13 offscreen passes where there was 1 and 2.5 ms more of the
+    /// GPU, by its position 17 and frames taking up to 10 ms to draw.
     private func pace(_ scene: UIWindowScene) {
-        guard Self.paces, let layer = (scene.keyWindow ?? scene.windows.first)?.layer else { return }
-        let animation = CABasicAnimation(keyPath: "transform.translation.x")
+        guard Self.paces, let window = scene.keyWindow ?? scene.windows.first else { return }
+        let pacer = CALayer()
+        let animation = CABasicAnimation(keyPath: "opacity")
         animation.isAdditive = true
         animation.fromValue = 0
         animation.toValue = 0
         animation.duration = 1
         animation.repeatCount = .infinity
         animation.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
-        layer.add(animation, forKey: paceKey)
-        pacedLayer = layer
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pacer.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        pacer.backgroundColor = CGColor(gray: 0, alpha: 0.002)
+        window.layer.addSublayer(pacer)
+        pacer.add(animation, forKey: "pace")
+        CATransaction.commit()
+        self.pacer = pacer
     }
     #endif
 
@@ -224,8 +233,13 @@ public final class FlightClock: NSObject {
         updateLink = nil
         link?.invalidate()
         link = nil
-        pacedLayer?.removeAnimation(forKey: paceKey)
-        pacedLayer = nil
+        if let pacer {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            pacer.removeFromSuperlayer()
+            CATransaction.commit()
+            self.pacer = nil
+        }
         if let observer {
             CFRunLoopObserverInvalidate(observer)
             self.observer = nil
