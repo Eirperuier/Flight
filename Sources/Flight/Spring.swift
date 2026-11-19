@@ -140,8 +140,6 @@ public final class FlightClock: NSObject {
         #if canImport(UIKit) && !targetEnvironment(macCatalyst)
         if #available(iOS 18, tvOS 18, visionOS 2, *), let scene = Self.scene() {
             let updateLink = UIUpdateLink(windowScene: scene)
-            updateLink.requiresContinuousUpdates = true
-            updateLink.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
             #if os(visionOS)
             let frame = 1.0 / 90
             #else
@@ -154,6 +152,9 @@ public final class FlightClock: NSObject {
                 self.lastTimestamp = now
                 self.tick(max(dt, 1.0 / 240))
             }
+            // Only once it has an action: asking for continuous updates without one is a crash.
+            updateLink.requiresContinuousUpdates = true
+            updateLink.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
             updateLink.isEnabled = true
             self.updateLink = updateLink
             return
