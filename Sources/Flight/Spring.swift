@@ -102,11 +102,12 @@ public struct SpringVector: Sendable {
 ///
 /// On iOS 18 and later it is a UI update link (`UIUpdateLink`), acting in the update's last phase
 /// before the commit. Before that (and on the Mac) a display link says a frame is due and the
-/// callback waits for the end of that turn of the run loop. The display link's rate is only a
-/// wish: changes made after its callback, as these are, went at 80 frames a second on an iPhone
-/// Air asking for 120 (a branch paged), and at 120 only while something else asked for it (an
-/// animation with its own rate, a display link moving things in its callback). The update link
-/// asks for the frames the changes are made in.
+/// callback waits for the end of that turn of the run loop.
+///
+/// Either asks for 120 frames a second, and a phone takes that as a wish: an iPhone Air paging a
+/// branch gave the display link 80, and the update link 120 the first time and 80 the next two.
+/// What it went by every time is an animation asking for 120: so while the clock runs, the window
+/// holds one that changes nothing (`paces`).
 @MainActor
 public final class FlightClock: NSObject {
     private let tick: (Double) -> Void
@@ -116,6 +117,12 @@ public final class FlightClock: NSObject {
     private var observer: CFRunLoopObserver?
     /// The UI update link, while running (an `UIUpdateLink`, kept untyped for systems before it).
     private var updateLink: AnyObject?
+    /// Whether running clocks hold an animation in the window asking for their rate. Off only to see
+    /// what they get without it.
+    public static var paces = true
+    /// The layer holding this clock's animation, while it runs.
+    private weak var pacedLayer: CALayer?
+    private var paceKey: String { "flight.clock.\(ObjectIdentifier(self).hashValue)" }
     #if !canImport(UIKit)
     private weak var view: NSView?
     #endif
@@ -157,6 +164,7 @@ public final class FlightClock: NSObject {
             updateLink.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
             updateLink.isEnabled = true
             self.updateLink = updateLink
+            pace(scene)
             return
         }
         #endif
@@ -169,6 +177,9 @@ public final class FlightClock: NSObject {
         #endif
         link.add(to: .main, forMode: .common)
         self.link = link
+        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        if let scene = Self.scene() { pace(scene) }
+        #endif
 
         // Before the layout pass and the Core Animation commit (order 2,000,000) of the same turn.
         let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, 1_998_000) { [weak self] _, _ in
@@ -184,6 +195,21 @@ public final class FlightClock: NSObject {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         return scenes.first { $0.activationState == .foregroundActive } ?? scenes.first { $0.activationState == .foregroundInactive }
     }
+
+    /// An animation on the window that changes nothing (its opacity, plus nothing) and asks for 120 frames a
+    /// second, for as long as the clock runs.
+    private func pace(_ scene: UIWindowScene) {
+        guard Self.paces, let layer = (scene.keyWindow ?? scene.windows.first)?.layer else { return }
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.isAdditive = true
+        animation.fromValue = 0
+        animation.toValue = 0
+        animation.duration = 1
+        animation.repeatCount = .infinity
+        animation.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
+        layer.add(animation, forKey: paceKey)
+        pacedLayer = layer
+    }
     #endif
 
     public func stop() {
@@ -195,6 +221,8 @@ public final class FlightClock: NSObject {
         updateLink = nil
         link?.invalidate()
         link = nil
+        pacedLayer?.removeAnimation(forKey: paceKey)
+        pacedLayer = nil
         if let observer {
             CFRunLoopObserverInvalidate(observer)
             self.observer = nil
