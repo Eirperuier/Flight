@@ -107,7 +107,7 @@ public struct SpringVector: Sendable {
 /// Either asks for 120 frames a second, and a phone takes that as a wish: an iPhone Air paging a
 /// branch gave the display link 80, and the update link 120 the first time and 80 the next two.
 /// What it went by every time is an animation asking for 120: so while the clock runs, the window
-/// holds one that changes nothing (`paces`).
+/// holds one that changes nothing, on a point that draws nothing (`paces`).
 @MainActor
 public final class FlightClock: NSObject {
     private let tick: (Double) -> Void
@@ -121,8 +121,7 @@ public final class FlightClock: NSObject {
     /// what they get without it.
     public static var paces = true
     /// The layer holding this clock's animation, while it runs.
-    private weak var pacedLayer: CALayer?
-    private var paceKey: String { "flight.clock.\(ObjectIdentifier(self).hashValue)" }
+    private var pacer: CALayer?
     #if !canImport(UIKit)
     private weak var view: NSView?
     #endif
@@ -196,10 +195,12 @@ public final class FlightClock: NSObject {
         return scenes.first { $0.activationState == .foregroundActive } ?? scenes.first { $0.activationState == .foregroundInactive }
     }
 
-    /// An animation on the window that changes nothing (its opacity, plus nothing) and asks for 120 frames a
-    /// second, for as long as the clock runs.
+    /// An animation that changes nothing and asks for 120 frames a second, for as long as the clock runs: on a layer
+    /// of its own in the window, a point that draws nothing. (On the window's own layer, an opacity animation had the
+    /// whole window drawn offscreen every frame: 13 passes where there was 1, and 2.5 ms more of the GPU.)
     private func pace(_ scene: UIWindowScene) {
-        guard Self.paces, let layer = (scene.keyWindow ?? scene.windows.first)?.layer else { return }
+        guard Self.paces, let window = scene.keyWindow ?? scene.windows.first else { return }
+        let pacer = CALayer()
         let animation = CABasicAnimation(keyPath: "opacity")
         animation.isAdditive = true
         animation.fromValue = 0
@@ -207,8 +208,13 @@ public final class FlightClock: NSObject {
         animation.duration = 1
         animation.repeatCount = .infinity
         animation.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
-        layer.add(animation, forKey: paceKey)
-        pacedLayer = layer
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pacer.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        window.layer.addSublayer(pacer)
+        pacer.add(animation, forKey: "pace")
+        CATransaction.commit()
+        self.pacer = pacer
     }
     #endif
 
@@ -221,8 +227,13 @@ public final class FlightClock: NSObject {
         updateLink = nil
         link?.invalidate()
         link = nil
-        pacedLayer?.removeAnimation(forKey: paceKey)
-        pacedLayer = nil
+        if let pacer {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            pacer.removeFromSuperlayer()
+            CATransaction.commit()
+            self.pacer = nil
+        }
         if let observer {
             CFRunLoopObserverInvalidate(observer)
             self.observer = nil
