@@ -130,7 +130,10 @@ public final class FlightClock: NSObject {
         pending = nil
         #if canImport(UIKit)
         let link = CADisplayLink(target: WeakTarget(self), selector: #selector(WeakTarget.fire(_:)))
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        // As high as the display goes, asked as a rate, not a range: given 80 to 120, a phone ran it at the
+        // range's floor (an iPhone Air, a card flying with nothing else asking more: 60 to 80 frames a second
+        // through its fastest quarter second), and at 120 only when something else asked for it.
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
         #else
         guard let view else { return }
         let link = view.displayLink(target: WeakTarget(self), selector: #selector(WeakTarget.fire(_:)))
