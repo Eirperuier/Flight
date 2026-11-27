@@ -1113,7 +1113,7 @@ final class PreviewNavigationController: UINavigationController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        becomeFirstResponder()
+        if controller?.configuration.takesFocus != false { becomeFirstResponder() }
     }
 
     override var keyCommands: [UIKeyCommand]? {

@@ -59,6 +59,9 @@ public struct ImagePreviewConfiguration: Sendable {
     public var restoreSpring: PreviewSpring = .restore
     /// A single tap (a click on the Mac) hides and shows the bars (otherwise it closes the viewer).
     public var tapTogglesAccessories = true
+    /// Once open, the viewer takes the focus (for its keys: Escape, the arrows), and a keyboard up goes
+    /// down. Off, whatever has the focus keeps it, its keyboard up.
+    public var takesFocus = true
 
     public init() {}
 }
