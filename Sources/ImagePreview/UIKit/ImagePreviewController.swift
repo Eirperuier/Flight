@@ -82,6 +82,7 @@ public final class ImagePreviewController {
 
         let navigation = PreviewNavigationController(controller: self, page: page)
         navigation.modalPresentationStyle = .custom
+        transitioning.keepsFocus = !configuration.takesFocus
         navigation.transitioningDelegate = transitioning
         navigation.modalPresentationCapturesStatusBarAppearance = true
         self.navigation = navigation
@@ -1127,12 +1128,43 @@ final class PreviewNavigationController: UINavigationController {
     @objc private func key(_ command: UIKeyCommand) { controller?.handleKey(command) }
 }
 
+/// UIKit asks a presentation whether to put the focus away as it presents and give it back once it has
+/// gone (`_shouldPreserveFirstResponder`, `_shouldRestoreFirstResponder`): the viewer's says no when it
+/// keeps the focus where it is. Private names kept encoded, found once, each one's type checked before
+/// it's answered for; gone or changed, UIKit's own answer stands.
+@MainActor
+private enum PreviewFocus {
+    private typealias Ask = @convention(c) (AnyObject, Selector) -> Bool
+    private static let names = ["X3Nob3VsZFByZXNlcnZlRmlyc3RSZXNwb25kZXI=", "X3Nob3VsZFJlc3RvcmVGaXJzdFJlc3BvbmRlcg=="]
+
+    static let installed: Bool = {
+        var any = false
+        for encoded in names {
+            guard let name = Data(base64Encoded: encoded).flatMap({ String(data: $0, encoding: .utf8) }) else { continue }
+            let selector = NSSelectorFromString(name)
+            guard let inherited = class_getInstanceMethod(UIPresentationController.self, selector),
+                  let types = method_getTypeEncoding(inherited), String(cString: types) == "B16@0:8" else { continue }
+            let original = unsafeBitCast(method_getImplementation(inherited), to: Ask.self)
+            let answer: @convention(block) (AnyObject) -> Bool = { presentation in
+                // Asked on the main thread, where it's set before the viewer presents.
+                let keeps = (presentation as? PreviewPresentationController)?.keepsFocus == true
+                return keeps ? false : original(presentation, selector)
+            }
+            any = class_addMethod(PreviewPresentationController.self, selector, imp_implementationWithBlock(answer), types) || any
+        }
+        return any
+    }()
+}
+
 /// Presents the viewer over everything, leaving what is underneath in place.
 private final class PreviewTransitioning: NSObject, UIViewControllerTransitioningDelegate {
     private(set) weak var presentation: PreviewPresentationController?
+    /// The viewer doesn't take the focus (`takesFocus` off).
+    var keepsFocus = false
 
     func presentationController(forPresented presented: UIViewController, presenting: UIViewController?, source: UIViewController) -> UIPresentationController? {
         let presentation = PreviewPresentationController(presentedViewController: presented, presenting: presenting)
+        presentation.keepsFocus = keepsFocus
         self.presentation = presentation
         return presentation
     }
@@ -1142,6 +1174,15 @@ private final class PreviewPresentationController: UIPresentationController {
     /// Closing: touches go to what is underneath, which can be scrolled while the image flies home.
     var passesTouches = false {
         didSet { containerView?.isUserInteractionEnabled = !passesTouches }
+    }
+    /// Whatever has the focus keeps it as the viewer comes and goes, its keyboard up where it is: UIKit
+    /// otherwise puts it away as the viewer presents and gives it back only once the viewer has gone
+    /// (`PreviewFocus`).
+    nonisolated(unsafe) var keepsFocus = false
+
+    override init(presentedViewController: UIViewController, presenting presentingViewController: UIViewController?) {
+        _ = PreviewFocus.installed
+        super.init(presentedViewController: presentedViewController, presenting: presentingViewController)
     }
 
     override func containerViewWillLayoutSubviews() {
