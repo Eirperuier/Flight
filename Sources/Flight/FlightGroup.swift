@@ -85,8 +85,13 @@ public final class FlightPiece {
 
     /// A view flying: placed by centre, bounds and turn, its layer's corners rounded. It never
     /// takes touches, so what lies under it can still be scrolled and tapped while it flies.
+    ///
+    /// - Parameter laysOut: the view lays itself out afresh at every frame's size, as a shared
+    ///   element between two layouts of the same thing (a card narrow in one place, wide in the
+    ///   other): its parts keep their own sizes and slide to their places, a bar widens, text stays
+    ///   sharp, where a picture of it would stretch. Off, it is only resized, for a picture.
     public convenience init(view: UIView, from: FlightPlace, velocity: CGPoint = .zero, delay: Double = 0, target: @escaping () -> FlightPlace?,
-                            extras: ((FlightPlace) -> Void)? = nil) {
+                            laysOut: Bool = false, extras: ((FlightPlace) -> Void)? = nil) {
         view.isUserInteractionEnabled = false
         self.init(from: from, velocity: velocity, delay: delay, target: target) { [weak view] place in
             guard let view else { return }
@@ -94,6 +99,7 @@ public final class FlightPiece {
             view.center = place.center
             view.transform = place.turn == 0 ? .identity : CGAffineTransform(rotationAngle: place.turn)
             view.layer.cornerRadius = place.corner
+            if laysOut { view.layoutIfNeeded() }
             extras?(place)
         }
     }

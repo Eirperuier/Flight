@@ -71,6 +71,32 @@ import UIKit
     #expect(!view.isUserInteractionEnabled)
 }
 
+/// Laid out afresh as it flies, a part pinned to its trailing edge goes with it frame by frame.
+@MainActor @Test func aPieceThatLaysOutMovesItsParts() {
+    let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 40))
+    let part = UIView()
+    part.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(part)
+    NSLayoutConstraint.activate([
+        part.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        part.topAnchor.constraint(equalTo: view.topAnchor),
+        part.widthAnchor.constraint(equalToConstant: 10),
+        part.heightAnchor.constraint(equalToConstant: 10),
+    ])
+    view.layoutIfNeeded()
+    let target = FlightPlace(frame: CGRect(x: 0, y: 0, width: 300, height: 40))
+    let piece = FlightPiece(view: view, from: FlightPlace(frame: view.frame), target: { target }, laysOut: true)
+    let group = FlightGroup(pieces: [piece])
+    group.start()
+    group.step(1.0 / 120)
+    // Mid-way: wider, the part at its edge (layout rounds to pixels).
+    #expect(view.bounds.width > 100)
+    #expect(abs(part.frame.maxX - view.bounds.width) < 1)
+    for _ in 0..<240 { group.step(1.0 / 120) }
+    #expect(part.frame.maxX == 300)
+    group.stop()
+}
+
 /// The shadow's drawn blurs hold the shadow: some of their pixels are seen (on every platform,
 /// the Mac's included, whatever its drawing context's scale).
 @MainActor @Test func elevationShadowSpritesAreDrawn() throws {
