@@ -131,7 +131,7 @@ struct PreviewFlight {
     /// Opening: one spring for place and size, ω `openOmega`; stiffer (`escapeOmega`) while it
     /// comes out from under the layers, easing back over `lift` once over them all, so it
     /// starts briskly and no force jumps.
-    static let openOmega = 20.0, escapeOmega = 30.0
+    static let openOmega = 26.0, escapeOmega = 38.0
     /// Closing: the viewer's own closing spring (`ImagePreviewConfiguration.transitionSpring`),
     /// for the place and the size alike, as a close with nothing over the thumbnail has it.
     static let homeOmega = 2 * Double.pi / PreviewSpring.transition.response, homeZeta = PreviewSpring.transition.dampingRatio
